@@ -1,0 +1,113 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum GameState {
+  wait
+  start
+  end
+}
+
+enum Stage {
+  night
+  action
+  env
+  actionResolve
+  hurt
+  talk
+  vote
+}
+
+enum Role {
+  fatter1
+  fatter2
+  fatter
+  passenger
+}
+
+enum ActionCard {
+  listen
+  blow
+  grab
+  endure
+  suck
+  scold
+}
+
+enum EnvironmentCard {
+  gas
+  stink
+  stew
+  none
+}
+
+model Room {
+  roomId       String   @id @db.VarChar(64)
+  ownerOpenId  String   @db.VarChar(64)
+  gameState    GameState
+  playerCount  Int
+  roleConfig   String   @db.VarChar(32)
+  currentFloor Int
+  currentStage Stage
+  envDeck      Json
+  version      Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  players Player[]
+  rounds  Round[]
+  matches Match[]
+}
+
+model Player {
+  roomId     String   @db.VarChar(64)
+  openId     String   @db.VarChar(64)
+  nickname   String   @db.VarChar(64)
+  avatar     String   @db.VarChar(256)
+  role       Role
+  hp         Int      @default(4)
+  votePower  Float    @default(1)
+  isAlive    Boolean  @default(true)
+  actionCard ActionCard?
+  voteTarget String?  @db.VarChar(64)
+  isReady    Boolean  @default(false)
+  joinTime   DateTime @default(now())
+
+  room Room @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
+
+  @@id([roomId, openId])
+  @@index([roomId])
+}
+
+model Round {
+  roomId            String           @db.VarChar(64)
+  floor             Int
+  environmentCard   EnvironmentCard?
+  actionSubmissions Json
+  voteSubmissions   Json
+  settlementResult  Json
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  room Room @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
+
+  @@id([roomId, floor])
+  @@index([roomId])
+}
+
+model Match {
+  matchId      String   @id @db.VarChar(64)
+  roomId       String   @db.VarChar(64)
+  rounds       Json
+  winnerResult Json
+  createdAt    DateTime @default(now())
+
+  room Room @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
+
+  @@index([roomId])
+}
