@@ -2,49 +2,94 @@
 // Each route maps a JSON body to the corresponding Room aggregate command.
 
 import express, { NextFunction, Request, Response } from "express";
-import { Room, RoomSnapshot } from "../domain/aggregates/Room";
+import { Room } from "../domain/aggregates/Room";
+import { ActionCard } from "../domain/types";
+import { RoleConfig } from "../domain/services/DealService";
 import { uuidv4 } from "../utils/uuid";
 
 // ──────────────────────────────────────────────
 // In-memory room store type
+// Stores Room instances directly so that all in-memory state (including
+// idempotency request tracking) is preserved across HTTP calls.
 // ──────────────────────────────────────────────
 
-export type RoomStore = Map<string, RoomSnapshot>;
+export type RoomStore = Map<string, Room>;
+
+// ──────────────────────────────────────────────
+// Validation helpers
+// ──────────────────────────────────────────────
+
+const VALID_ROLE_CONFIGS: ReadonlySet<string> = new Set<RoleConfig>(["independent", "faction"]);
+const VALID_ACTION_CARDS: ReadonlySet<string> = new Set(Object.values(ActionCard));
+
+function validateRoleConfig(value: unknown): RoleConfig {
+  if (typeof value !== "string" || !VALID_ROLE_CONFIGS.has(value)) {
+    throw Object.assign(
+      new Error(`Invalid roleConfig "${value}". Must be one of: ${[...VALID_ROLE_CONFIGS].join(", ")}`),
+      { status: 400 }
+    );
+  }
+  return value as RoleConfig;
+}
+
+function validateActionCard(value: unknown): ActionCard {
+  if (typeof value !== "string" || !VALID_ACTION_CARDS.has(value)) {
+    throw Object.assign(
+      new Error(`Invalid actionCard "${value}". Must be one of: ${[...VALID_ACTION_CARDS].join(", ")}`),
+      { status: 400 }
+    );
+  }
+  return value as ActionCard;
+}
 
 // ──────────────────────────────────────────────
 // App factory
 // ──────────────────────────────────────────────
 
+/**
+ * Tags an error as a domain/client error (HTTP 400) if it has no explicit
+ * HTTP status assigned. Mutates the error in-place. All throws from Room
+ * aggregate methods represent invalid commands (client errors), so untagged
+ * errors from route handlers are treated as 400. Errors that already carry an
+ * explicit status (e.g. 404) are left unchanged.
+ */
+function asDomainError(err: unknown): void {
+  if (err != null && typeof (err as { status?: number }).status === "undefined") {
+    Object.assign(err as object, { status: 400 });
+  }
+}
+
 export function createApp(rooms: RoomStore = new Map()): express.Application {
   const app = express();
   app.use(express.json());
 
-  // Helper: persist a Room snapshot after a command
+  // Helper: persist a Room instance after a command
   function persist(room: Room): void {
-    rooms.set(room.id, room.snapshot());
+    rooms.set(room.id, room);
   }
 
   // Helper: load a Room from the store or 404
   function loadRoom(roomId: string): Room {
-    const snapshot = rooms.get(roomId);
-    if (!snapshot) throw Object.assign(new Error(`Room ${roomId} not found`), { status: 404 });
-    return Room.restore(snapshot);
+    const room = rooms.get(roomId);
+    if (!room) throw Object.assign(new Error(`Room ${roomId} not found`), { status: 404 });
+    return room;
   }
 
   // ── POST /rooms ──────────────────────────────
   // Body: { ownerOpenId, roleConfig, requestId? }
   app.post("/rooms", (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { ownerOpenId, roleConfig, requestId = uuidv4() } = req.body as {
+      const { ownerOpenId, roleConfig: rawRoleConfig, requestId = uuidv4() } = req.body as {
         ownerOpenId: string;
-        roleConfig: string;
+        roleConfig: unknown;
         requestId?: string;
       };
-      const room = Room.create({ requestId, ownerOpenId, roleConfig: roleConfig as "independent" | "faction" });
+      const roleConfig = validateRoleConfig(rawRoleConfig);
+      const room = Room.create({ requestId, ownerOpenId, roleConfig });
       persist(room);
       res.status(201).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
-      next(err);
+      asDomainError(err); next(err);
     }
   });
 
@@ -64,7 +109,7 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
       persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
-      next(err);
+      asDomainError(err); next(err);
     }
   });
 
@@ -80,7 +125,7 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
       persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
-      next(err);
+      asDomainError(err); next(err);
     }
   });
 
@@ -99,7 +144,7 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
       persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
-      next(err);
+      asDomainError(err); next(err);
     }
   });
 
@@ -108,17 +153,18 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   app.post("/rooms/:roomId/actions", (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const { openId, actionCard, requestId = uuidv4() } = req.body as {
+      const { openId, actionCard: rawActionCard, requestId = uuidv4() } = req.body as {
         openId: string;
-        actionCard: string;
+        actionCard: unknown;
         requestId?: string;
       };
+      const actionCard = validateActionCard(rawActionCard);
       const room = loadRoom(roomId);
-      room.submitAction({ requestId, roomId, openId, actionCard: actionCard as import("../domain/types").ActionCard });
+      room.submitAction({ requestId, roomId, openId, actionCard });
       persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
-      next(err);
+      asDomainError(err); next(err);
     }
   });
 
@@ -133,7 +179,7 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
       persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
-      next(err);
+      asDomainError(err); next(err);
     }
   });
 
@@ -153,7 +199,7 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
       persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
-      next(err);
+      asDomainError(err); next(err);
     }
   });
 
@@ -172,7 +218,7 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
       persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
-      next(err);
+      asDomainError(err); next(err);
     }
   });
 
@@ -180,24 +226,34 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   app.get("/rooms/:roomId", (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const snapshot = rooms.get(roomId);
-      if (!snapshot) {
+      const room = rooms.get(roomId);
+      if (!room) {
         res.status(404).json({ error: `Room ${roomId} not found` });
         return;
       }
-      res.status(200).json({ room: snapshot });
+      res.status(200).json({ room: room.snapshot() });
     } catch (err) {
-      next(err);
+      asDomainError(err); next(err);
     }
   });
 
   // ── Global error handler ─────────────────────
+  // Domain/validation errors carry an explicit `status` (4xx).
+  // Any other unhandled error is treated as a server fault (500).
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    const status = (err as { status?: number }).status ?? 400;
+    const explicitStatus = (err as { status?: number }).status;
+    const status =
+      explicitStatus !== undefined &&
+      Number.isInteger(explicitStatus) &&
+      explicitStatus >= 400 &&
+      explicitStatus < 600
+        ? explicitStatus
+        : 500;
     const message = err instanceof Error ? err.message : "Unknown error";
     res.status(status).json({ error: message });
   });
 
   return app;
 }
+

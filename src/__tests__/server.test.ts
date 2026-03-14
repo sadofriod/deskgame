@@ -1,5 +1,6 @@
 // Tests for the Express HTTP gateway (src/server/app.ts).
-// Covers the full request/response contract for each route.
+// Covers the request/response contract for each route, including
+// happy-path and representative failure cases.
 
 import { RoomStore, createApp } from "../server/app";
 import * as http from "http";
@@ -52,18 +53,23 @@ describe("Express HTTP gateway", () => {
   const OWNER = "owner-open-id";
   const SEED = "test-seed-42";
 
-  beforeEach(() => {
-    // Fresh in-memory store per test
-    store = new Map();
-    server = http.createServer(createApp(store));
-    server.listen(0); // random available port
-  });
+  beforeEach(
+    () =>
+      new Promise<void>((resolve) => {
+        // Fresh in-memory store per test; await the "listening" event so
+        // server.address() is guaranteed non-null before any request is sent.
+        store = new Map();
+        server = http.createServer(createApp(store));
+        server.listen(0, "127.0.0.1", resolve);
+      })
+  );
 
   afterEach((done) => {
     server.close(done);
   });
 
-  // Helper – creates a room and returns roomId
+  // ── shared helpers ───────────────────────────
+
   async function createRoom(): Promise<string> {
     const res = await makeRequest(server, "POST", "/rooms", {
       ownerOpenId: OWNER,
@@ -74,7 +80,6 @@ describe("Express HTTP gateway", () => {
     return (res.body as { room: { roomId: string } }).room.roomId;
   }
 
-  // Helper – joins `count` extra players
   async function joinPlayers(roomId: string, count: number, startIdx = 0): Promise<void> {
     for (let i = 0; i < count; i++) {
       const idx = startIdx + i;
@@ -86,6 +91,24 @@ describe("Express HTTP gateway", () => {
       });
       expect(res.status).toBe(200);
     }
+  }
+
+  /** Build a started game room (owner + extra players) and return roomId. */
+  async function startedRoom(extraPlayers = 4): Promise<string> {
+    const roomId = await createRoom();
+    await makeRequest(server, "POST", `/rooms/${roomId}/players`, {
+      openId: OWNER,
+      nickname: "Owner",
+      avatar: "",
+      requestId: "req-owner-join",
+    });
+    await joinPlayers(roomId, extraPlayers, 1);
+    await makeRequest(server, "POST", `/rooms/${roomId}/start`, {
+      openId: OWNER,
+      seed: SEED,
+      requestId: "req-start",
+    });
+    return roomId;
   }
 
   // ── POST /rooms ──────────────────────────────
@@ -109,6 +132,16 @@ describe("Express HTTP gateway", () => {
       });
       expect(res.status).toBe(400);
       expect((res.body as { error: string }).error).toMatch(/ownerOpenId/);
+    });
+
+    it("returns 400 for an invalid roleConfig", async () => {
+      const res = await makeRequest(server, "POST", "/rooms", {
+        ownerOpenId: OWNER,
+        roleConfig: "invalid-config",
+        requestId: "req-3",
+      });
+      expect(res.status).toBe(400);
+      expect((res.body as { error: string }).error).toMatch(/roleConfig/);
     });
   });
 
@@ -184,21 +217,8 @@ describe("Express HTTP gateway", () => {
   // ── POST /rooms/:roomId/start ────────────────
   describe("POST /rooms/:roomId/start", () => {
     it("starts the game with 5 players", async () => {
-      const roomId = await createRoom();
-      // Owner joins first
-      await makeRequest(server, "POST", `/rooms/${roomId}/players`, {
-        openId: OWNER,
-        nickname: "Owner",
-        avatar: "",
-        requestId: "req-owner-join",
-      });
-      await joinPlayers(roomId, 4, 1);
-
-      const res = await makeRequest(server, "POST", `/rooms/${roomId}/start`, {
-        openId: OWNER,
-        seed: SEED,
-        requestId: "req-start",
-      });
+      const roomId = await startedRoom();
+      const res = await makeRequest(server, "GET", `/rooms/${roomId}`);
       expect(res.status).toBe(200);
       const body = res.body as { room: { gameState: string } };
       expect(body.room.gameState).toBe("start");
@@ -226,20 +246,7 @@ describe("Express HTTP gateway", () => {
   // ── POST /rooms/:roomId/actions ──────────────
   describe("POST /rooms/:roomId/actions", () => {
     it("returns 400 when not in action stage", async () => {
-      const roomId = await createRoom();
-      // Owner joins
-      await makeRequest(server, "POST", `/rooms/${roomId}/players`, {
-        openId: OWNER,
-        nickname: "Owner",
-        avatar: "",
-        requestId: "req-owner-join",
-      });
-      await joinPlayers(roomId, 4, 1);
-      await makeRequest(server, "POST", `/rooms/${roomId}/start`, {
-        openId: OWNER,
-        seed: SEED,
-        requestId: "req-start",
-      });
+      const roomId = await startedRoom();
       // Still in 'night' stage; submitting action should fail
       const res = await makeRequest(server, "POST", `/rooms/${roomId}/actions`, {
         openId: OWNER,
@@ -248,24 +255,75 @@ describe("Express HTTP gateway", () => {
       });
       expect(res.status).toBe(400);
     });
+
+    it("returns 400 for an invalid actionCard value", async () => {
+      const roomId = await startedRoom();
+      // Advance to action stage first
+      await makeRequest(server, "POST", `/rooms/${roomId}/stage/advance`, {
+        openId: OWNER,
+        requestId: "req-adv",
+      });
+      const res = await makeRequest(server, "POST", `/rooms/${roomId}/actions`, {
+        openId: OWNER,
+        actionCard: "not-a-card",
+        requestId: "req-bad-card",
+      });
+      expect(res.status).toBe(400);
+      expect((res.body as { error: string }).error).toMatch(/actionCard/);
+    });
+  });
+
+  // ── POST /rooms/:roomId/environment ──────────
+  describe("POST /rooms/:roomId/environment", () => {
+    it("returns 400 when not in env stage", async () => {
+      const roomId = await startedRoom();
+      // Still in 'night' stage; revealing environment should fail
+      const res = await makeRequest(server, "POST", `/rooms/${roomId}/environment`, {
+        requestId: "req-env",
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("reveals environment card when in env stage", async () => {
+      const roomId = await startedRoom();
+      // night -> action
+      await makeRequest(server, "POST", `/rooms/${roomId}/stage/advance`, {
+        openId: OWNER,
+        requestId: "req-adv-1",
+      });
+      // action -> env (submit actions for all alive players first is optional for advance)
+      await makeRequest(server, "POST", `/rooms/${roomId}/stage/advance`, {
+        openId: OWNER,
+        requestId: "req-adv-2",
+      });
+      const res = await makeRequest(server, "POST", `/rooms/${roomId}/environment`, {
+        requestId: "req-env",
+      });
+      expect(res.status).toBe(200);
+      const body = res.body as { room: { currentStage: string } };
+      expect(body.room.currentStage).toBe("env");
+    });
+  });
+
+  // ── POST /rooms/:roomId/votes ────────────────
+  describe("POST /rooms/:roomId/votes", () => {
+    it("returns 400 when not in vote stage", async () => {
+      const roomId = await startedRoom();
+      // Still in 'night' stage; submitting vote should fail
+      const res = await makeRequest(server, "POST", `/rooms/${roomId}/votes`, {
+        openId: OWNER,
+        voteTarget: "player-1",
+        votePowerAtSubmit: 1,
+        requestId: "req-vote",
+      });
+      expect(res.status).toBe(400);
+    });
   });
 
   // ── POST /rooms/:roomId/stage/advance ────────
   describe("POST /rooms/:roomId/stage/advance", () => {
     it("advances stage from night to action", async () => {
-      const roomId = await createRoom();
-      await makeRequest(server, "POST", `/rooms/${roomId}/players`, {
-        openId: OWNER,
-        nickname: "Owner",
-        avatar: "",
-        requestId: "req-owner-join",
-      });
-      await joinPlayers(roomId, 4, 1);
-      await makeRequest(server, "POST", `/rooms/${roomId}/start`, {
-        openId: OWNER,
-        seed: SEED,
-        requestId: "req-start",
-      });
+      const roomId = await startedRoom();
 
       const res = await makeRequest(server, "POST", `/rooms/${roomId}/stage/advance`, {
         openId: OWNER,
@@ -275,5 +333,15 @@ describe("Express HTTP gateway", () => {
       const body = res.body as { room: { currentStage: string } };
       expect(body.room.currentStage).toBe("action");
     });
+
+    it("returns 400 when non-owner advances stage", async () => {
+      const roomId = await startedRoom();
+      const res = await makeRequest(server, "POST", `/rooms/${roomId}/stage/advance`, {
+        openId: "player-1",
+        requestId: "req-advance-nonowner",
+      });
+      expect(res.status).toBe(400);
+    });
   });
 });
+
