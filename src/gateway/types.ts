@@ -1,7 +1,8 @@
 // WebSocket message protocol – docs/implements/server-architecture.md §3.1
 // and docs/implements/05-domain-protocols.md
 
-import { ActionCard, EnvironmentCard, GameState, Role, Stage } from "../domain/types";
+import { ActionCard, EnvironmentCard, GameState, Role, Stage, WinnerCamp } from "../domain/types";
+import { RoleConfig } from "../domain/services/DealService";
 
 // ──────────────────────────────────────────────
 // Message envelope
@@ -24,7 +25,7 @@ export interface WsMessage {
 
 export interface CreateRoomPayload {
   ownerOpenId: string;
-  roleConfig: string;
+  roleConfig: RoleConfig;
 }
 
 export interface JoinRoomPayload {
@@ -163,9 +164,10 @@ export interface StageAdvancedEventPayload {
 
 export interface WinnerDecidedEventPayload {
   roomId: string;
-  winnerCamp: string;
+  winnerCamp: WinnerCamp;
   reason: string;
-  decidedAt: Date;
+  /** ISO 8601 string – Date is serialized to string over JSON/Socket.IO */
+  decidedAt: string;
   version: number;
 }
 

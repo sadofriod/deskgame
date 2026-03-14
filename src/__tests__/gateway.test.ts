@@ -84,23 +84,24 @@ describe("RoomRegistry", () => {
 // RoomGateway integration tests
 // ──────────────────────────────────────────────
 
-/** Helper: create an http server + RoomGateway and connect a client. */
-function createGateway(): {
+/** Helper: create an http server + RoomGateway and return once the server is listening. */
+async function createGateway(): Promise<{
   gateway: RoomGateway;
   client: () => Socket;
   cleanup: () => Promise<void>;
   port: number;
-} {
+}> {
   const httpServer = createServer();
   const registry = new RoomRegistry();
   const gateway = new RoomGateway(httpServer, { registry });
 
-  let port = 0;
-  httpServer.listen(0);
-  const addr = httpServer.address();
-  if (addr && typeof addr === "object") {
-    port = addr.port;
-  }
+  const port = await new Promise<number>((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(0, () => {
+      const addr = httpServer.address();
+      resolve(typeof addr === "object" && addr !== null ? addr.port : 0);
+    });
+  });
 
   const clients: Socket[] = [];
   const client = () => {
@@ -128,14 +129,14 @@ function waitForEvent<T>(socket: Socket, event: string): Promise<T> {
 }
 
 describe("RoomGateway", () => {
-  it("instantiates with a custom registry", () => {
-    const { gateway, cleanup } = createGateway();
+  it("instantiates with a custom registry", async () => {
+    const { gateway, cleanup } = await createGateway();
     expect(gateway.rooms).toBeInstanceOf(RoomRegistry);
     return cleanup();
   });
 
   it("responds with RoomCreated event when CreateRoom command is sent", async () => {
-    const { client, cleanup } = createGateway();
+    const { client, cleanup } = await createGateway();
     const socket = client();
 
     await new Promise<void>((resolve) => socket.on("connect", resolve).connect());
@@ -157,7 +158,7 @@ describe("RoomGateway", () => {
   });
 
   it("creates a room in the registry after CreateRoom", async () => {
-    const { gateway, client, cleanup } = createGateway();
+    const { gateway, client, cleanup } = await createGateway();
     const socket = client();
     await new Promise<void>((resolve) => socket.on("connect", resolve).connect());
 
@@ -177,7 +178,7 @@ describe("RoomGateway", () => {
   });
 
   it("broadcasts PlayerJoinedRoom after JoinRoom command", async () => {
-    const { gateway, client, cleanup } = createGateway();
+    const { client, cleanup } = await createGateway();
 
     // First client creates the room
     const owner = client();
@@ -213,7 +214,7 @@ describe("RoomGateway", () => {
   });
 
   it("returns an error for an unknown command", async () => {
-    const { client, cleanup } = createGateway();
+    const { client, cleanup } = await createGateway();
     const socket = client();
     await new Promise<void>((resolve) => socket.on("connect", resolve).connect());
 
@@ -233,7 +234,7 @@ describe("RoomGateway", () => {
   });
 
   it("returns an error for JoinRoom with unknown roomId", async () => {
-    const { client, cleanup } = createGateway();
+    const { client, cleanup } = await createGateway();
     const socket = client();
     await new Promise<void>((resolve) => socket.on("connect", resolve).connect());
 
@@ -253,7 +254,7 @@ describe("RoomGateway", () => {
   });
 
   it("owner receives StageAdvanced event after AdvanceStage command", async () => {
-    const { client, cleanup } = createGateway();
+    const { client, cleanup } = await createGateway();
 
     const ownerSocket = client();
     await new Promise<void>((resolve) => ownerSocket.on("connect", resolve).connect());

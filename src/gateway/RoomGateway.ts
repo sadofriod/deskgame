@@ -7,7 +7,6 @@ import { Server as SocketServer } from "socket.io";
 
 import { Room } from "../domain/aggregates/Room";
 import { DomainEvent } from "../domain/events";
-import { RoleConfig } from "../domain/services/DealService";
 import {
   AdvanceStagePayload,
   ClientToServerEvents,
@@ -46,8 +45,12 @@ const CMD_ADVANCE_STAGE = "AdvanceStage";
 export interface RoomGatewayOptions {
   /** Optional pre-existing registry. Useful for testing. */
   registry?: RoomRegistry;
-  /** Socket.io CORS origins. Defaults to '*'. */
-  corsOrigin?: string | string[];
+  /**
+   * Socket.io CORS origins.
+   * Pass an explicit origin string/array (e.g. "https://example.com") for production.
+   * Defaults to `false` (no CORS headers – safe for server-side clients).
+   */
+  corsOrigin?: string | string[] | false;
 }
 
 /**
@@ -70,7 +73,7 @@ export class RoomGateway {
   constructor(httpServer: HttpServer, options: RoomGatewayOptions = {}) {
     this.registry = options.registry ?? new RoomRegistry();
     this.io = new SocketServer(httpServer, {
-      cors: { origin: options.corsOrigin ?? "*" },
+      cors: { origin: options.corsOrigin ?? false },
     });
     this.attachListeners();
   }
@@ -168,7 +171,7 @@ export class RoomGateway {
     const room = Room.create({
       requestId: msg.requestId ?? socketId,
       ownerOpenId: p.ownerOpenId,
-      roleConfig: p.roleConfig as RoleConfig,
+      roleConfig: p.roleConfig,
     });
 
     this.registry.set(room.id, room);
@@ -181,6 +184,9 @@ export class RoomGateway {
 
   private handleJoinRoom(socketId: string, msg: WsMessage): void {
     const p = msg.payload as unknown as JoinRoomPayload;
+    if (!p.roomId) throw new Error("roomId is required");
+    if (!p.openId) throw new Error("openId is required");
+    if (!p.nickname) throw new Error("nickname is required");
     const room = this.requireRoom(p.roomId);
 
     room.joinRoom({
@@ -197,6 +203,8 @@ export class RoomGateway {
 
   private handleLeaveRoom(socketId: string, msg: WsMessage): void {
     const p = msg.payload as unknown as LeaveRoomPayload;
+    if (!p.roomId) throw new Error("roomId is required");
+    if (!p.openId) throw new Error("openId is required");
     const room = this.requireRoom(p.roomId);
 
     room.leaveRoom({
@@ -211,6 +219,9 @@ export class RoomGateway {
 
   private handleStartGame(socketId: string, msg: WsMessage): void {
     const p = msg.payload as unknown as StartGamePayload;
+    if (!p.roomId) throw new Error("roomId is required");
+    if (!p.openId) throw new Error("openId is required");
+    if (!p.seed) throw new Error("seed is required");
     const room = this.requireRoom(p.roomId);
 
     room.startGame({
@@ -225,6 +236,9 @@ export class RoomGateway {
 
   private handleSubmitAction(socketId: string, msg: WsMessage): void {
     const p = msg.payload as unknown as SubmitActionPayload;
+    if (!p.roomId) throw new Error("roomId is required");
+    if (!p.openId) throw new Error("openId is required");
+    if (!p.actionCard) throw new Error("actionCard is required");
     const room = this.requireRoom(p.roomId);
 
     room.submitAction({
@@ -239,6 +253,7 @@ export class RoomGateway {
 
   private handleRevealEnvironment(socketId: string, msg: WsMessage): void {
     const p = msg.payload as unknown as RevealEnvironmentPayload;
+    if (!p.roomId) throw new Error("roomId is required");
     const room = this.requireRoom(p.roomId);
 
     room.revealEnvironment({
@@ -251,6 +266,10 @@ export class RoomGateway {
 
   private handleSubmitVote(socketId: string, msg: WsMessage): void {
     const p = msg.payload as unknown as SubmitVotePayload;
+    if (!p.roomId) throw new Error("roomId is required");
+    if (!p.openId) throw new Error("openId is required");
+    if (!p.voteTarget) throw new Error("voteTarget is required");
+    if (typeof p.votePowerAtSubmit !== "number") throw new Error("votePowerAtSubmit must be a number");
     const room = this.requireRoom(p.roomId);
 
     room.submitVote({
@@ -266,6 +285,8 @@ export class RoomGateway {
 
   private handleAdvanceStage(socketId: string, msg: WsMessage): void {
     const p = msg.payload as unknown as AdvanceStagePayload;
+    if (!p.roomId) throw new Error("roomId is required");
+    if (!p.openId && !p.timeoutFlag) throw new Error("Either openId or timeoutFlag must be provided");
     const room = this.requireRoom(p.roomId);
 
     room.advanceStage({
