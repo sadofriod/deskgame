@@ -8,6 +8,8 @@
   },
   "scripts": {
     "build": "tsc",
+    "start": "node dist/server/index.js",
+    "dev": "ts-node src/server/index.ts",
     "test": "jest"
   },
   "repository": {
@@ -23,10 +25,15 @@
   },
   "homepage": "https://github.com/sadofriod/deskgame#readme",
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^25.5.0",
     "jest": "^30.3.0",
     "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
   }
 }
