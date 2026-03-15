@@ -8,3 +8,4 @@ export * from "./domain/services/EnvironmentDeckService";
 export * from "./domain/services/SettlementService";
 export * from "./domain/services/StageFlowService";
 export * from "./domain/services/WinnerJudgementService";
+export * from "./gateway";
