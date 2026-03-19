@@ -237,7 +237,10 @@ describe("Express HTTP gateway", () => {
   });
 
   it("serves the admin spa shell", async () => {
-    const response = await makeRequest(server, "GET", "/admin");
+    const redirectResponse = await makeRequest(server, "GET", "/admin");
+    expect(redirectResponse.status).toBe(308);
+
+    const response = await makeRequest(server, "GET", "/admin/");
     expect(response.status).toBe(200);
     expect(typeof response.body).toBe("string");
     expect(response.body).toContain("DeskGame 管理后台");

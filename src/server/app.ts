@@ -100,6 +100,10 @@ type AdminOverviewUser = {
   lastJoinTime: string;
 };
 
+type InternalAdminOverviewUser = Omit<AdminOverviewUser, "lastJoinTime"> & {
+  lastJoinTime: Date;
+};
+
 type AdminOverviewRoom = {
   roomId: string;
   roomCode: string;
@@ -158,13 +162,15 @@ function loadApiDocsMarkdown(): string {
   }
 }
 
+const API_DOCS_MARKDOWN = loadApiDocsMarkdown();
+
 function buildAdminOverview(rooms: RoomStore) {
   const snapshots = [...rooms.values()].map((room) => room.snapshot());
   const activeRooms = snapshots
     .filter((room) => room.playerCount > 0 && room.gameState !== "ended")
     .sort((left, right) => right.playerCount - left.playerCount || left.roomCode.localeCompare(right.roomCode));
 
-  const users = new Map<string, Omit<AdminOverviewUser, "lastJoinTime"> & { lastJoinTime: Date }>();
+  const users = new Map<string, InternalAdminOverviewUser>();
 
   for (const room of activeRooms) {
     for (const player of room.players) {
@@ -203,8 +209,6 @@ function buildAdminOverview(rooms: RoomStore) {
       .sort((left, right) => right.lastJoinTime.getTime() - left.lastJoinTime.getTime())
       .map((user) => ({
         ...user,
-        roomIds: [...user.roomIds],
-        roomCodes: [...user.roomCodes],
         lastJoinTime: user.lastJoinTime.toISOString(),
       })),
     rooms: activeRooms.map((room: RoomSnapshot): AdminOverviewRoom => ({
@@ -226,7 +230,7 @@ function buildAdminOverview(rooms: RoomStore) {
         }))
         .sort((left, right) => left.joinTime.localeCompare(right.joinTime)),
     })),
-    apiDocsMarkdown: loadApiDocsMarkdown(),
+    apiDocsMarkdown: API_DOCS_MARKDOWN,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -249,7 +253,7 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   }
 
   app.get("/admin", (_req: Request, res: Response) => {
-    res.sendFile(resolveRepoPath("public", "admin", "index.html"));
+    res.redirect(308, "/admin/");
   });
 
   app.use("/admin/vendor/react", express.static(resolveRepoPath("node_modules", "react", "umd")));
