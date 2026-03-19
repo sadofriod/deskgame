@@ -3,9 +3,10 @@
 
 import fs from "fs";
 import path from "path";
+import { timingSafeEqual } from "crypto";
 import express, { NextFunction, Request, Response } from "express";
 import { Room, RoomSnapshot } from "../domain/aggregates/Room";
-import { ActionCard, Role, RoleConfig, RoomConfig } from "../domain/types";
+import { ActionCard, GameState, Role, RoleConfig, RoomConfig } from "../domain/types";
 import { uuidv4 } from "../utils/uuid";
 
 // ──────────────────────────────────────────────
@@ -89,6 +90,11 @@ type AdminUser = {
   avatar: string;
 };
 
+type AdminCredentials = {
+  username: string;
+  password: string;
+};
+
 type AdminOverviewUser = {
   openId: string;
   nickname: string;
@@ -164,10 +170,71 @@ function loadApiDocsMarkdown(): string {
 
 const API_DOCS_MARKDOWN = loadApiDocsMarkdown();
 
+function resolveAdminCredentials(): AdminCredentials | null {
+  const username = process.env.ADMIN_AUTH_USERNAME?.trim();
+  const password = process.env.ADMIN_AUTH_PASSWORD;
+  if (!username || !password) {
+    return null;
+  }
+  return { username, password };
+}
+
+function parseBasicAuthHeader(headerValue: string | undefined): AdminCredentials | null {
+  if (!headerValue || !headerValue.startsWith("Basic ")) {
+    return null;
+  }
+
+  try {
+    const decoded = Buffer.from(headerValue.slice("Basic ".length), "base64").toString("utf8");
+    const separatorIndex = decoded.indexOf(":");
+    if (separatorIndex <= 0) {
+      return null;
+    }
+    return {
+      username: decoded.slice(0, separatorIndex),
+      password: decoded.slice(separatorIndex + 1),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function constantTimeStringEquals(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function requireAdminAuth(req: Request, res: Response, next: NextFunction): void {
+  const configuredCredentials = resolveAdminCredentials();
+  if (!configuredCredentials) {
+    res.status(503).json({ error: "Admin authentication is not configured" });
+    return;
+  }
+
+  const providedCredentials = parseBasicAuthHeader(
+    typeof req.headers.authorization === "string" ? req.headers.authorization : undefined
+  );
+  if (!providedCredentials) {
+    res.setHeader("WWW-Authenticate", 'Basic realm="DeskGame Admin"');
+    res.status(401).json({ error: "Admin authentication required" });
+    return;
+  }
+
+  const usernameMatches = constantTimeStringEquals(providedCredentials.username, configuredCredentials.username);
+  const passwordMatches = constantTimeStringEquals(providedCredentials.password, configuredCredentials.password);
+  if (!usernameMatches || !passwordMatches) {
+    res.status(403).json({ error: "Invalid admin credentials" });
+    return;
+  }
+
+  next();
+}
+
 function buildAdminOverview(rooms: RoomStore) {
   const snapshots = [...rooms.values()].map((room) => room.snapshot());
   const activeRooms = snapshots
-    .filter((room) => room.playerCount > 0 && room.gameState !== "ended")
+    .filter((room) => room.playerCount > 0 && room.gameState !== GameState.ended)
     .sort((left, right) => right.playerCount - left.playerCount || left.roomCode.localeCompare(right.roomCode));
 
   const users = new Map<string, InternalAdminOverviewUser>();
@@ -238,7 +305,6 @@ function buildAdminOverview(rooms: RoomStore) {
 export function createApp(rooms: RoomStore = new Map()): express.Application {
   const app = express();
   app.use(express.json());
-  app.use(express.static(resolveRepoPath("public"), { redirect: false }));
 
   // Helper: persist a Room instance after a command
   function persist(room: Room): void {
@@ -252,21 +318,16 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
     return room;
   }
 
-  app.get("/admin", (_req: Request, res: Response) => {
+  app.get(/^\/admin$/, requireAdminAuth, (_req: Request, res: Response) => {
     res.redirect(308, "/admin/");
   });
-
-  app.use("/admin/vendor/react", express.static(resolveRepoPath("node_modules", "react", "umd")));
-  app.use("/admin/vendor/react-dom", express.static(resolveRepoPath("node_modules", "react-dom", "umd")));
-  app.use("/admin/vendor/mui", express.static(resolveRepoPath("node_modules", "@mui", "material", "umd")));
-  app.use("/admin/vendor/marked", express.static(resolveRepoPath("node_modules", "marked", "lib")));
-  app.use("/admin/vendor/dompurify", express.static(resolveRepoPath("node_modules", "dompurify", "dist")));
 
   const handleAdminOverview = (_req: Request, res: Response) => {
     res.status(200).json(buildAdminOverview(rooms));
   };
-  app.get("/admin/api/overview", handleAdminOverview);
-  app.get("/api/admin/overview", handleAdminOverview);
+  app.get("/admin/api/overview", requireAdminAuth, handleAdminOverview);
+  app.get("/api/admin/overview", requireAdminAuth, handleAdminOverview);
+  app.use("/admin", requireAdminAuth, express.static(resolveRepoPath("public", "admin"), { redirect: false }));
 
   // ── POST /rooms ──────────────────────────────
   app.post("/rooms", (req: Request, res: Response, next: NextFunction) => {

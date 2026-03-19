@@ -9,7 +9,8 @@ function makeRequest(
   server: http.Server,
   method: string,
   path: string,
-  body?: JsonBody
+  body?: JsonBody,
+  headers?: http.OutgoingHttpHeaders
 ): Promise<{ status: number; body: JsonBody | string }> {
   return new Promise((resolve, reject) => {
     const addr = server.address() as { port: number };
@@ -22,6 +23,7 @@ function makeRequest(
       headers: {
         "Content-Type": "application/json",
         "Content-Length": Buffer.byteLength(bodyStr),
+        ...headers,
       },
     };
     const request = http.request(options, (response) => {
@@ -47,11 +49,16 @@ describe("Express HTTP gateway", () => {
   let store: RoomStore;
   const OWNER = "owner-open-id";
   const ORIGINAL_ADMIN_USERS = process.env.ADMIN_USERS;
+  const ORIGINAL_ADMIN_AUTH_USERNAME = process.env.ADMIN_AUTH_USERNAME;
+  const ORIGINAL_ADMIN_AUTH_PASSWORD = process.env.ADMIN_AUTH_PASSWORD;
+  const ADMIN_AUTH_HEADER = `Basic ${Buffer.from("desk-admin:secret-pass").toString("base64")}`;
 
   beforeEach(
     () =>
       new Promise<void>((resolve) => {
         delete process.env.ADMIN_USERS;
+        process.env.ADMIN_AUTH_USERNAME = "desk-admin";
+        process.env.ADMIN_AUTH_PASSWORD = "secret-pass";
         store = new Map();
         server = http.createServer(createApp(store));
         server.listen(0, "127.0.0.1", resolve);
@@ -65,6 +72,16 @@ describe("Express HTTP gateway", () => {
           delete process.env.ADMIN_USERS;
         } else {
           process.env.ADMIN_USERS = ORIGINAL_ADMIN_USERS;
+        }
+        if (ORIGINAL_ADMIN_AUTH_USERNAME === undefined) {
+          delete process.env.ADMIN_AUTH_USERNAME;
+        } else {
+          process.env.ADMIN_AUTH_USERNAME = ORIGINAL_ADMIN_AUTH_USERNAME;
+        }
+        if (ORIGINAL_ADMIN_AUTH_PASSWORD === undefined) {
+          delete process.env.ADMIN_AUTH_PASSWORD;
+        } else {
+          process.env.ADMIN_AUTH_PASSWORD = ORIGINAL_ADMIN_AUTH_PASSWORD;
         }
         server.close(() => resolve());
       })
@@ -212,7 +229,9 @@ describe("Express HTTP gateway", () => {
     const roomId = await createRoom();
     await joinPlayers(roomId, 1);
 
-    const response = await makeRequest(server, "GET", "/api/admin/overview");
+    const response = await makeRequest(server, "GET", "/api/admin/overview", undefined, {
+      Authorization: ADMIN_AUTH_HEADER,
+    });
     expect(response.status).toBe(200);
 
     const body = response.body as {
@@ -237,13 +256,33 @@ describe("Express HTTP gateway", () => {
   });
 
   it("serves the admin spa shell", async () => {
-    const redirectResponse = await makeRequest(server, "GET", "/admin");
+    const redirectResponse = await makeRequest(server, "GET", "/admin", undefined, {
+      Authorization: ADMIN_AUTH_HEADER,
+    });
     expect(redirectResponse.status).toBe(308);
 
-    const response = await makeRequest(server, "GET", "/admin/");
+    const response = await makeRequest(server, "GET", "/admin/", undefined, {
+      Authorization: ADMIN_AUTH_HEADER,
+    });
     expect(response.status).toBe(200);
     expect(typeof response.body).toBe("string");
     expect(response.body).toContain("DeskGame 管理后台");
     expect(response.body).toContain("/api/admin/overview");
+    expect(response.body).toContain("setInterval");
+  });
+
+  it("rejects unauthenticated admin requests", async () => {
+    const apiResponse = await makeRequest(server, "GET", "/api/admin/overview");
+    expect(apiResponse.status).toBe(401);
+
+    const pageResponse = await makeRequest(server, "GET", "/admin/");
+    expect(pageResponse.status).toBe(401);
+  });
+
+  it("rejects invalid admin credentials", async () => {
+    const response = await makeRequest(server, "GET", "/api/admin/overview", undefined, {
+      Authorization: `Basic ${Buffer.from("desk-admin:wrong-pass").toString("base64")}`,
+    });
+    expect(response.status).toBe(403);
   });
 });

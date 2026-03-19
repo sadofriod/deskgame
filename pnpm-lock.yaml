@@ -24,8 +24,8 @@ importers:
         specifier: ^5.2.1
         version: 5.2.1
       marked:
-        specifier: 17.0.4
-        version: 17.0.4
+        specifier: 15.0.12
+        version: 15.0.12
       react:
         specifier: 18.3.1
         version: 18.3.1
@@ -1447,9 +1447,9 @@ packages:
   makeerror@1.0.12:
     resolution: {integrity: sha512-JmqCvUhmt43madlpFzG4BQzG2Z3m6tvQDNKdClZnO3VbIudJYmxsT0FNJMeiB2+JTSlTQTSbU8QdesVmwJcmLg==}
 
-  marked@17.0.4:
-    resolution: {integrity: sha512-NOmVMM+KAokHMvjWmC5N/ZOvgmSWuqJB8FoYI019j4ogb/PeRMKoKIjReZ2w3376kkA8dSJIP8uD993Kxc0iRQ==}
-    engines: {node: '>= 20'}
+  marked@15.0.12:
+    resolution: {integrity: sha512-8dD6FusOQSrpv9Z1rdNMdlSgQOIP880DHqnohobOmYLElGEqAL/JvxvuxZO16r4HtjTlfPRDC1hbvxC9dPN2nA==}
+    engines: {node: '>= 18'}
     hasBin: true
 
   math-intrinsics@1.1.0:
@@ -3776,7 +3776,7 @@ snapshots:
     dependencies:
       tmpl: 1.0.5
 
-  marked@17.0.4: {}
+  marked@15.0.12: {}
 
   math-intrinsics@1.1.0: {}
 

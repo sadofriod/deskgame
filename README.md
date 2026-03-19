@@ -71,6 +71,7 @@ pnpm test
 ## 管理后台
 
 启动服务后，可通过 `http://localhost:3000/admin` 打开后台单页应用。
+后台页面会每 15 秒自动刷新一次房间与用户概览。
 
 后台提供以下能力：
 
@@ -101,6 +102,13 @@ ADMIN_USERS='[
     "avatar": "https://example.com/avatar.png"
   }
 ]'
+```
+
+后台访问受 HTTP Basic Auth 保护，需额外配置：
+
+```bash
+ADMIN_AUTH_USERNAME=desk-admin
+ADMIN_AUTH_PASSWORD=replace-with-a-strong-password
 ```
 
 ## HTTP 接入概览
