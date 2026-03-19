@@ -285,4 +285,18 @@ describe("Express HTTP gateway", () => {
     });
     expect(response.status).toBe(403);
   });
+
+  it("rate limits repeated failed admin authentication attempts", async () => {
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const response = await makeRequest(server, "GET", "/api/admin/overview", undefined, {
+        Authorization: `Basic ${Buffer.from("desk-admin:wrong-pass").toString("base64")}`,
+      });
+      expect(response.status).toBe(403);
+    }
+
+    const rateLimitedResponse = await makeRequest(server, "GET", "/api/admin/overview", undefined, {
+      Authorization: `Basic ${Buffer.from("desk-admin:wrong-pass").toString("base64")}`,
+    });
+    expect(rateLimitedResponse.status).toBe(429);
+  });
 });

@@ -287,7 +287,9 @@
               })
               .then((data) => {
                 if (!cancelled) {
-                  setState({ loading: false, error: "", data });
+                  setState(function () {
+                    return { loading: false, error: "", data };
+                  });
                 }
               })
               .catch((error) => {
