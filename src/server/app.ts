@@ -1,9 +1,13 @@
 // Express application factory – HTTP gateway for the DeskGame domain.
 // Each route maps a JSON body to the corresponding Room aggregate command.
 
+import fs from "fs";
+import path from "path";
+import { timingSafeEqual } from "crypto";
 import express, { NextFunction, Request, Response } from "express";
-import { Room } from "../domain/aggregates/Room";
-import { ActionCard, Role, RoleConfig, RoomConfig } from "../domain/types";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import { Room, RoomSnapshot } from "../domain/aggregates/Room";
+import { ActionCard, GameState, Role, RoleConfig, RoomConfig } from "../domain/types";
 import { uuidv4 } from "../utils/uuid";
 
 // ──────────────────────────────────────────────
@@ -80,9 +84,249 @@ function asDomainError(err: unknown): void {
   }
 }
 
+type AdminUser = {
+  id: string;
+  name: string;
+  email: string;
+  avatar: string;
+};
+
+type AdminCredentials = {
+  username: string;
+  password: string;
+};
+
+type AdminOverviewUser = {
+  openId: string;
+  nickname: string;
+  avatar: string;
+  isReady: boolean;
+  isAlive: boolean;
+  roomIds: string[];
+  roomCodes: string[];
+  lastJoinTime: string;
+};
+
+type InternalAdminOverviewUser = Omit<AdminOverviewUser, "lastJoinTime"> & {
+  lastJoinTime: Date;
+};
+
+type AdminOverviewRoom = {
+  roomId: string;
+  roomCode: string;
+  ownerOpenId: string;
+  gameState: string;
+  currentStage: string;
+  playerCount: number;
+  configuredPlayerCount: number;
+  players: Array<{
+    openId: string;
+    nickname: string;
+    avatar: string;
+    isReady: boolean;
+    isAlive: boolean;
+    joinTime: string;
+  }>;
+};
+
+function resolveRepoPath(...segments: string[]): string {
+  return path.resolve(__dirname, "..", "..", ...segments);
+}
+
+function resolveAdminUsers(): AdminUser[] {
+  const raw = process.env.ADMIN_USERS;
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as Partial<AdminUser> | Array<Partial<AdminUser>>;
+      const list = Array.isArray(parsed) ? parsed : [parsed];
+      const normalized = list
+        .map((item, index) => ({
+          id: typeof item.id === "string" && item.id.trim() ? item.id : `admin-${index + 1}`,
+          name: typeof item.name === "string" && item.name.trim() ? item.name : `管理员 ${index + 1}`,
+          email: typeof item.email === "string" && item.email.trim() ? item.email : "",
+          avatar: typeof item.avatar === "string" && item.avatar.trim() ? item.avatar : "",
+        }))
+        .filter((item) => item.email || item.name);
+      if (normalized.length > 0) {
+        return normalized;
+      }
+    } catch {
+      // Ignore malformed ADMIN_USERS and fall through to single-admin envs.
+    }
+  }
+
+  const name = process.env.ADMIN_NAME ?? "默认管理员";
+  const email = process.env.ADMIN_EMAIL ?? "";
+  const avatar = process.env.ADMIN_AVATAR ?? "";
+  return [{ id: process.env.ADMIN_ID ?? "admin-1", name, email, avatar }];
+}
+
+function loadApiDocsMarkdown(): string {
+  try {
+    return fs.readFileSync(resolveRepoPath("docs", "接入文档.md"), "utf8");
+  } catch {
+    return "# API 文档暂不可用\n\n未能读取 docs/接入文档.md。";
+  }
+}
+
+const API_DOCS_MARKDOWN = loadApiDocsMarkdown();
+
+function resolveAdminCredentials(): AdminCredentials | null {
+  const username = process.env.ADMIN_AUTH_USERNAME?.trim();
+  const password = process.env.ADMIN_AUTH_PASSWORD?.trim();
+  if (!username || !password) {
+    return null;
+  }
+  return { username, password };
+}
+
+function parseBasicAuthHeader(headerValue: string | undefined): AdminCredentials | null {
+  if (!headerValue || !headerValue.startsWith("Basic ")) {
+    return null;
+  }
+
+  try {
+    const decoded = Buffer.from(headerValue.slice("Basic ".length), "base64").toString("utf8");
+    const separatorIndex = decoded.indexOf(":");
+    if (separatorIndex <= 0) {
+      return null;
+    }
+    return {
+      username: decoded.slice(0, separatorIndex),
+      password: decoded.slice(separatorIndex + 1),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function constantTimeStringEquals(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function resolveAdminAuthKey(req: Request): string {
+  const clientAddress = req.ip || req.socket.remoteAddress;
+  if (clientAddress) {
+    return ipKeyGenerator(clientAddress);
+  }
+
+  const userAgent = typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : "no-user-agent";
+  return `unidentified:${req.method}:${req.path}:${userAgent}`;
+}
+
+function requireAdminAuth(req: Request, res: Response, next: NextFunction): void {
+  const configuredCredentials = resolveAdminCredentials();
+  if (!configuredCredentials) {
+    res.status(503).json({ error: "Admin authentication is not configured" });
+    return;
+  }
+
+  const providedCredentials = parseBasicAuthHeader(
+    typeof req.headers.authorization === "string" ? req.headers.authorization : undefined
+  );
+  if (!providedCredentials) {
+    res.setHeader("WWW-Authenticate", 'Basic realm="DeskGame Admin"');
+    res.status(401).json({ error: "Admin authentication required" });
+    return;
+  }
+
+  const usernameMatches = constantTimeStringEquals(providedCredentials.username, configuredCredentials.username);
+  const passwordMatches = constantTimeStringEquals(providedCredentials.password, configuredCredentials.password);
+  if (!usernameMatches || !passwordMatches) {
+    res.status(403).json({ error: "Invalid admin credentials" });
+    return;
+  }
+
+  next();
+}
+
+function buildAdminOverview(rooms: RoomStore) {
+  const snapshots = [...rooms.values()].map((room) => room.snapshot());
+  const activeRooms = snapshots
+    .filter((room) => room.playerCount > 0 && room.gameState !== GameState.ended)
+    .sort((left, right) => right.playerCount - left.playerCount || left.roomCode.localeCompare(right.roomCode));
+
+  const users = new Map<string, InternalAdminOverviewUser>();
+
+  for (const room of activeRooms) {
+    for (const player of room.players) {
+      const existing = users.get(player.openId);
+      if (!existing) {
+        users.set(player.openId, {
+          openId: player.openId,
+          nickname: player.nickname,
+          avatar: player.avatar,
+          isReady: player.isReady,
+          isAlive: player.isAlive,
+          roomIds: [room.roomId],
+          roomCodes: [room.roomCode],
+          lastJoinTime: player.joinTime,
+        });
+        continue;
+      }
+
+      if (!existing.roomIds.includes(room.roomId)) existing.roomIds.push(room.roomId);
+      if (!existing.roomCodes.includes(room.roomCode)) existing.roomCodes.push(room.roomCode);
+      existing.isReady = existing.isReady || player.isReady;
+      existing.isAlive = existing.isAlive || player.isAlive;
+      if (player.joinTime > existing.lastJoinTime) {
+        existing.lastJoinTime = player.joinTime;
+      }
+    }
+  }
+
+  return {
+    admins: resolveAdminUsers(),
+    stats: {
+      onlineUserCount: users.size,
+      activeRoomCount: activeRooms.length,
+    },
+    users: [...users.values()]
+      .sort((left, right) => right.lastJoinTime.getTime() - left.lastJoinTime.getTime())
+      .map((user) => ({
+        ...user,
+        lastJoinTime: user.lastJoinTime.toISOString(),
+      })),
+    rooms: activeRooms.map((room: RoomSnapshot): AdminOverviewRoom => ({
+      roomId: room.roomId,
+      roomCode: room.roomCode,
+      ownerOpenId: room.ownerOpenId,
+      gameState: room.gameState,
+      currentStage: room.currentStage,
+      playerCount: room.playerCount,
+      configuredPlayerCount: room.roomConfig.playerCount,
+      players: room.players
+        .map((player) => ({
+          openId: player.openId,
+          nickname: player.nickname,
+          avatar: player.avatar,
+          isReady: player.isReady,
+          isAlive: player.isAlive,
+          joinTime: player.joinTime.toISOString(),
+        }))
+        .sort((left, right) => left.joinTime.localeCompare(right.joinTime)),
+    })),
+    apiDocsMarkdown: API_DOCS_MARKDOWN,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 export function createApp(rooms: RoomStore = new Map()): express.Application {
   const app = express();
   app.use(express.json());
+  const adminAuthRateLimit = rateLimit({
+    windowMs: 60_000,
+    limit: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: true,
+    keyGenerator: resolveAdminAuthKey,
+    handler: (_req: Request, res: Response) => {
+      res.status(429).json({ error: "Too many admin authentication attempts" });
+    },
+  });
 
   // Helper: persist a Room instance after a command
   function persist(room: Room): void {
@@ -95,6 +339,25 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
     if (!room) throw Object.assign(new Error(`Room ${roomId} not found`), { status: 404 });
     return room;
   }
+
+  app.get(/^\/admin$/, adminAuthRateLimit, requireAdminAuth, (_req: Request, res: Response) => {
+    res.redirect(308, "/admin/");
+  });
+
+  app.get("/admin/api/overview", adminAuthRateLimit, requireAdminAuth, (_req: Request, res: Response) => {
+    res.status(200).json(buildAdminOverview(rooms));
+  });
+
+  app.get("/api/admin/overview", adminAuthRateLimit, requireAdminAuth, (_req: Request, res: Response) => {
+    res.status(200).json(buildAdminOverview(rooms));
+  });
+
+  app.use(
+    "/admin",
+    adminAuthRateLimit,
+    requireAdminAuth,
+    express.static(resolveRepoPath("public", "admin"), { redirect: false })
+  );
 
   // ── POST /rooms ──────────────────────────────
   app.post("/rooms", (req: Request, res: Response, next: NextFunction) => {
@@ -291,4 +554,3 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
 
   return app;
 }
-

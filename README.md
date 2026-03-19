@@ -68,6 +68,49 @@ pnpm start
 pnpm test
 ```
 
+## 管理后台
+
+启动服务后，可通过 `http://localhost:3000/admin` 打开后台单页应用。
+后台页面会每 15 秒自动刷新一次房间与用户概览。
+
+后台提供以下能力：
+
+- 用户列表
+- 在线人数统计
+- 活跃房间数量
+- 活跃房间列表
+- 将 `docs/接入文档.md` 转换后展示为 API 文档
+
+管理员信息从环境变量读取，支持两种方式：
+
+1. 单管理员变量：
+
+```bash
+ADMIN_NAME=运营管理员
+ADMIN_EMAIL=ops@example.com
+ADMIN_AVATAR=https://example.com/avatar.png
+```
+
+2. 多管理员 JSON：
+
+```bash
+ADMIN_USERS='[
+  {
+    "id": "ops-1",
+    "name": "运营管理员",
+    "email": "ops@example.com",
+    "avatar": "https://example.com/avatar.png"
+  }
+]'
+```
+
+后台访问受 HTTP Basic Auth 保护，需额外配置：
+
+```bash
+ADMIN_AUTH_USERNAME=desk-admin
+ADMIN_AUTH_PASSWORD=replace-with-a-strong-password
+```
+
 ## HTTP 接入概览
 
 基础地址示例：`http://localhost:3000`

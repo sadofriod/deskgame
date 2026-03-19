@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DeskGame 管理后台</title>
+    <script src="/admin/vendor/react/react.production.min.js"></script>
+    <script src="/admin/vendor/react-dom/react-dom.production.min.js"></script>
+    <script src="/admin/vendor/mui/material-ui.production.min.js"></script>
+    <script src="/admin/vendor/marked/marked.umd.js"></script>
+    <script src="/admin/vendor/dompurify/purify.min.js"></script>
+    <style>
+      body {
+        margin: 0;
+        background: #f4f6f8;
+      }
+
+      #root {
+        min-height: 100vh;
+      }
+
+      .markdown-body h1,
+      .markdown-body h2,
+      .markdown-body h3 {
+        margin-top: 1.5rem;
+      }
+
+      .markdown-body pre {
+        padding: 16px;
+        overflow: auto;
+        border-radius: 8px;
+        background: #111827;
+        color: #f9fafb;
+      }
+
+      .markdown-body code {
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      }
+
+      .markdown-body table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .markdown-body th,
+      .markdown-body td {
+        padding: 8px 12px;
+        border: 1px solid #e5e7eb;
+        text-align: left;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      const e = React.createElement;
+      const REFRESH_INTERVAL_MS = 15000;
+      const {
+        Alert,
+        AppBar,
+        Avatar,
+        Box,
+        Card,
+        CardContent,
+        Chip,
+        CircularProgress,
+        Container,
+        CssBaseline,
+        Divider,
+        Grid,
+        List,
+        ListItem,
+        ListItemAvatar,
+        ListItemText,
+        Paper,
+        Stack,
+        Table,
+        TableBody,
+        TableCell,
+        TableContainer,
+        TableHead,
+        TableRow,
+        ThemeProvider,
+        Toolbar,
+        Typography,
+        createTheme,
+      } = MaterialUI;
+
+      const theme = createTheme({
+        palette: {
+          primary: {
+            main: "#1976d2",
+          },
+        },
+        shape: {
+          borderRadius: 12,
+        },
+      });
+
+      function MetricCard(props) {
+        return e(
+          Card,
+          { elevation: 0, sx: { height: "100%" } },
+          e(
+            CardContent,
+            null,
+            e(Typography, { color: "text.secondary", gutterBottom: true, variant: "overline" }, props.label),
+            e(Typography, { component: "div", variant: "h4", sx: { fontWeight: 700 } }, props.value),
+            e(Typography, { color: "text.secondary", variant: "body2" }, props.caption)
+          )
+        );
+      }
+
+      function AdminChips(props) {
+        if (!props.admins.length) {
+          return e(Typography, { color: "inherit", variant: "body2" }, "未配置管理员信息");
+        }
+
+        return e(
+          Stack,
+          { direction: "row", spacing: 1, useFlexGap: true, flexWrap: "wrap", justifyContent: { xs: "flex-start", md: "flex-end" } },
+          props.admins.map((admin) =>
+            e(Chip, {
+              key: admin.id,
+              avatar: e(Avatar, { alt: admin.name, src: admin.avatar }),
+              color: "default",
+              label: admin.email ? admin.name + " · " + admin.email : admin.name,
+              variant: "outlined",
+              sx: { color: "white", borderColor: "rgba(255,255,255,0.3)" },
+            })
+          )
+        );
+      }
+
+      function UsersTable(props) {
+        return e(
+          TableContainer,
+          { component: Paper, elevation: 0 },
+          e(
+            Table,
+            null,
+            e(
+              TableHead,
+              null,
+              e(
+                TableRow,
+                null,
+                e(TableCell, null, "用户"),
+                e(TableCell, null, "OpenID"),
+                e(TableCell, null, "所在房间"),
+                e(TableCell, null, "状态"),
+                e(TableCell, null, "最近加入时间")
+              )
+            ),
+            e(
+              TableBody,
+              null,
+              props.users.map((user) =>
+                e(
+                  TableRow,
+                  { key: user.openId, hover: true },
+                  e(
+                    TableCell,
+                    null,
+                    e(
+                      Stack,
+                      { direction: "row", spacing: 1.5, alignItems: "center" },
+                      e(Avatar, { alt: user.nickname, src: user.avatar }),
+                      e(
+                        Box,
+                        null,
+                        e(Typography, { variant: "subtitle2" }, user.nickname || "未命名用户"),
+                        e(Typography, { color: "text.secondary", variant: "body2" }, user.roomCodes.length + " 个活跃房间")
+                      )
+                    )
+                  ),
+                  e(TableCell, null, user.openId),
+                  e(
+                    TableCell,
+                    null,
+                    e(
+                      Stack,
+                      { direction: "row", spacing: 1, useFlexGap: true, flexWrap: "wrap" },
+                      user.roomCodes.map((code) =>
+                        e(Chip, { key: user.openId + "-" + code, label: "#" + code, size: "small", variant: "outlined" })
+                      )
+                    )
+                  ),
+                  e(
+                    TableCell,
+                    null,
+                    e(
+                      Stack,
+                      { direction: "row", spacing: 1, useFlexGap: true, flexWrap: "wrap" },
+                      e(Chip, { color: user.isAlive ? "success" : "default", label: user.isAlive ? "存活" : "淘汰", size: "small" }),
+                      e(Chip, { color: user.isReady ? "primary" : "warning", label: user.isReady ? "已准备" : "未准备", size: "small" })
+                    )
+                  ),
+                  e(TableCell, null, new Date(user.lastJoinTime).toLocaleString("zh-CN"))
+                )
+              )
+            )
+          )
+        );
+      }
+
+      function RoomsList(props) {
+        return e(
+          Grid,
+          { container: true, spacing: 2 },
+          props.rooms.map((room) =>
+            e(
+              Grid,
+              { item: true, xs: 12, md: 6, key: room.roomId },
+              e(
+                Card,
+                { elevation: 0, sx: { height: "100%" } },
+                e(
+                  CardContent,
+                  null,
+                  e(
+                    Stack,
+                    { direction: "row", justifyContent: "space-between", spacing: 2, alignItems: "flex-start" },
+                    e(
+                      Box,
+                      null,
+                      e(Typography, { variant: "h6", sx: { fontWeight: 700 } }, "房间 #" + room.roomCode),
+                      e(Typography, { color: "text.secondary", variant: "body2" }, room.roomId)
+                    ),
+                    e(
+                      Stack,
+                      { direction: "row", spacing: 1, useFlexGap: true, flexWrap: "wrap", justifyContent: "flex-end" },
+                      e(Chip, { color: "primary", label: room.currentStage, size: "small" }),
+                      e(Chip, { label: room.gameState, size: "small", variant: "outlined" })
+                    )
+                  ),
+                  e(Divider, { sx: { my: 2 } }),
+                  e(
+                    Stack,
+                    { direction: { xs: "column", sm: "row" }, spacing: 2, sx: { mb: 2 } },
+                    e(Typography, { color: "text.secondary", variant: "body2" }, "房主: " + room.ownerOpenId),
+                    e(Typography, { color: "text.secondary", variant: "body2" }, "人数: " + room.playerCount + "/" + room.configuredPlayerCount)
+                  ),
+                  e(
+                    List,
+                    { dense: true },
+                    room.players.map((player) =>
+                      e(
+                        ListItem,
+                        { key: room.roomId + "-" + player.openId, disableGutters: true },
+                        e(ListItemAvatar, null, e(Avatar, { alt: player.nickname, src: player.avatar })),
+                        e(ListItemText, {
+                          primary: player.nickname || player.openId,
+                          secondary:
+                            player.openId +
+                            " · " +
+                            (player.isReady ? "已准备" : "未准备") +
+                            " · " +
+                            (player.isAlive ? "存活" : "淘汰"),
+                        })
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        );
+      }
+
+      function App() {
+        const [state, setState] = React.useState({ loading: true, error: "", data: null });
+
+        React.useEffect(() => {
+          let cancelled = false;
+
+          function loadOverview() {
+            fetch("/api/admin/overview", { cache: "no-store" })
+              .then((response) => {
+                if (!response.ok) {
+                  if (response.status === 401 || response.status === 403) {
+                    throw new Error("管理员认证失败，请刷新页面后重新登录");
+                  }
+                  throw new Error("管理后台数据加载失败");
+                }
+                return response.json();
+              })
+              .then((data) => {
+                if (!cancelled) {
+                  setState(function () {
+                    return { loading: false, error: "", data };
+                  });
+                }
+              })
+              .catch((error) => {
+                if (!cancelled) {
+                  setState(function (previousState) {
+                    return {
+                      loading: false,
+                      error: error.message || "未知错误",
+                      data: previousState.data,
+                    };
+                  });
+                }
+              });
+          }
+
+          loadOverview();
+          const timerId = window.setInterval(loadOverview, REFRESH_INTERVAL_MS);
+          return function () {
+            cancelled = true;
+            window.clearInterval(timerId);
+          };
+        }, []);
+
+        const docsHtml = React.useMemo(function () {
+          if (!state.data || !state.data.apiDocsMarkdown) {
+            return "";
+          }
+          return DOMPurify.sanitize(marked.parse(state.data.apiDocsMarkdown));
+        }, [state.data]);
+
+        return e(
+          ThemeProvider,
+          { theme },
+          e(CssBaseline),
+          e(
+            Box,
+            { sx: { minHeight: "100vh", backgroundColor: "#f4f6f8" } },
+            e(
+              AppBar,
+              { position: "static", elevation: 0 },
+              e(
+                Toolbar,
+                { sx: { py: 1.5, alignItems: { xs: "flex-start", md: "center" } } },
+                e(
+                  Grid,
+                  { container: true, spacing: 2, alignItems: "center" },
+                  e(
+                    Grid,
+                    { item: true, xs: 12, md: 6 },
+                    e(Typography, { variant: "h5", sx: { fontWeight: 700 } }, "DeskGame 管理后台"),
+                    e(
+                      Typography,
+                      { variant: "body2", sx: { opacity: 0.85 } },
+                      "查看用户、在线人数、活跃房间和 API 文档（每 15 秒自动刷新）"
+                    )
+                  ),
+                  e(Grid, { item: true, xs: 12, md: 6 }, e(AdminChips, { admins: state.data ? state.data.admins : [] }))
+                )
+              )
+            ),
+            e(
+              Container,
+              { maxWidth: "xl", sx: { py: 4 } },
+              state.loading
+                ? e(
+                    Stack,
+                    { spacing: 2, alignItems: "center", sx: { py: 10 } },
+                    e(CircularProgress, null),
+                    e(Typography, { color: "text.secondary", variant: "body1" }, "正在加载后台数据…")
+                  )
+                : null,
+              state.error
+                ? e(Alert, { severity: "error", sx: { mb: 3 } }, state.error)
+                : null,
+              state.data
+                ? e(
+                    Stack,
+                    { spacing: 4 },
+                    e(
+                      Grid,
+                      { container: true, spacing: 2 },
+                      e(
+                        Grid,
+                        { item: true, xs: 12, md: 6, lg: 3 },
+                        e(MetricCard, {
+                          label: "在线人数",
+                          value: state.data.stats.onlineUserCount,
+                          caption: "基于当前活跃房间内的唯一玩家统计",
+                        })
+                      ),
+                      e(
+                        Grid,
+                        { item: true, xs: 12, md: 6, lg: 3 },
+                        e(MetricCard, {
+                          label: "活跃房间",
+                          value: state.data.stats.activeRoomCount,
+                          caption: "未结束且仍有玩家的房间数量",
+                        })
+                      ),
+                      e(
+                        Grid,
+                        { item: true, xs: 12, md: 6, lg: 3 },
+                        e(MetricCard, {
+                          label: "用户列表",
+                          value: state.data.users.length,
+                          caption: "按活跃房间聚合后的唯一用户数",
+                        })
+                      ),
+                      e(
+                        Grid,
+                        { item: true, xs: 12, md: 6, lg: 3 },
+                        e(MetricCard, {
+                          label: "数据更新时间",
+                          value: new Date(state.data.generatedAt).toLocaleTimeString("zh-CN"),
+                          caption: new Date(state.data.generatedAt).toLocaleDateString("zh-CN"),
+                        })
+                      )
+                    ),
+                    e(
+                      Box,
+                      null,
+                      e(Typography, { variant: "h6", sx: { mb: 2, fontWeight: 700 } }, "用户列表"),
+                      state.data.users.length
+                        ? e(UsersTable, { users: state.data.users })
+                        : e(Alert, { severity: "info" }, "当前没有在线用户")
+                    ),
+                    e(
+                      Box,
+                      null,
+                      e(Typography, { variant: "h6", sx: { mb: 2, fontWeight: 700 } }, "活跃房间列表"),
+                      state.data.rooms.length
+                        ? e(RoomsList, { rooms: state.data.rooms })
+                        : e(Alert, { severity: "info" }, "当前没有活跃房间")
+                    ),
+                    e(
+                      Box,
+                      null,
+                      e(Typography, { variant: "h6", sx: { mb: 2, fontWeight: 700 } }, "API 文档"),
+                      e(
+                        Paper,
+                        { elevation: 0, sx: { p: { xs: 2, md: 3 } } },
+                        e(Box, {
+                          className: "markdown-body",
+                          dangerouslySetInnerHTML: { __html: docsHtml },
+                        })
+                      )
+                    )
+                  )
+                : null
+            )
+          )
+        );
+      }
+
+      const rootElement = document.getElementById("root");
+      ReactDOM.createRoot(rootElement).render(e(App));
+    </script>
+  </body>
+</html>
