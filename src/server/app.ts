@@ -5,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import { timingSafeEqual } from "crypto";
 import express, { NextFunction, Request, Response } from "express";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { Room, RoomSnapshot } from "../domain/aggregates/Room";
 import { ActionCard, GameState, Role, RoleConfig, RoomConfig } from "../domain/types";
 import { uuidv4 } from "../utils/uuid";
@@ -95,11 +96,6 @@ type AdminCredentials = {
   password: string;
 };
 
-type AdminAuthAttempt = {
-  failures: number;
-  resetAt: number;
-};
-
 type AdminOverviewUser = {
   openId: string;
   nickname: string;
@@ -174,8 +170,6 @@ function loadApiDocsMarkdown(): string {
 }
 
 const API_DOCS_MARKDOWN = loadApiDocsMarkdown();
-const ADMIN_AUTH_RATE_LIMIT_WINDOW_MS = 60_000;
-const ADMIN_AUTH_RATE_LIMIT_MAX_FAILURES = 5;
 
 function resolveAdminCredentials(): AdminCredentials | null {
   const username = process.env.ADMIN_AUTH_USERNAME?.trim();
@@ -213,11 +207,39 @@ function constantTimeStringEquals(left: string, right: string): boolean {
 }
 
 function resolveAdminAuthKey(req: Request): string {
-  const forwardedFor = req.headers["x-forwarded-for"];
-  if (typeof forwardedFor === "string" && forwardedFor.trim()) {
-    return forwardedFor.split(",")[0]!.trim();
+  const clientAddress = req.ip || req.socket.remoteAddress;
+  if (clientAddress) {
+    return ipKeyGenerator(clientAddress);
   }
-  return req.ip || req.socket.remoteAddress || "unknown";
+
+  const userAgent = typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : "no-user-agent";
+  return `unidentified:${req.method}:${req.path}:${userAgent}`;
+}
+
+function requireAdminAuth(req: Request, res: Response, next: NextFunction): void {
+  const configuredCredentials = resolveAdminCredentials();
+  if (!configuredCredentials) {
+    res.status(503).json({ error: "Admin authentication is not configured" });
+    return;
+  }
+
+  const providedCredentials = parseBasicAuthHeader(
+    typeof req.headers.authorization === "string" ? req.headers.authorization : undefined
+  );
+  if (!providedCredentials) {
+    res.setHeader("WWW-Authenticate", 'Basic realm="DeskGame Admin"');
+    res.status(401).json({ error: "Admin authentication required" });
+    return;
+  }
+
+  const usernameMatches = constantTimeStringEquals(providedCredentials.username, configuredCredentials.username);
+  const passwordMatches = constantTimeStringEquals(providedCredentials.password, configuredCredentials.password);
+  if (!usernameMatches || !passwordMatches) {
+    res.status(403).json({ error: "Invalid admin credentials" });
+    return;
+  }
+
+  next();
 }
 
 function buildAdminOverview(rooms: RoomStore) {
@@ -294,65 +316,17 @@ function buildAdminOverview(rooms: RoomStore) {
 export function createApp(rooms: RoomStore = new Map()): express.Application {
   const app = express();
   app.use(express.json());
-  const adminAuthAttempts = new Map<string, AdminAuthAttempt>();
-
-  function recordAdminAuthFailure(req: Request): void {
-    const key = resolveAdminAuthKey(req);
-    const now = Date.now();
-    const attempt = adminAuthAttempts.get(key);
-    if (!attempt || attempt.resetAt <= now) {
-      adminAuthAttempts.set(key, { failures: 1, resetAt: now + ADMIN_AUTH_RATE_LIMIT_WINDOW_MS });
-      return;
-    }
-    attempt.failures += 1;
-  }
-
-  function clearAdminAuthFailures(req: Request): void {
-    adminAuthAttempts.delete(resolveAdminAuthKey(req));
-  }
-
-  function ensureAdminAccess(req: Request, res: Response): boolean {
-    const key = resolveAdminAuthKey(req);
-    const now = Date.now();
-    const attempt = adminAuthAttempts.get(key);
-    if (attempt) {
-      if (attempt.resetAt <= now) {
-        adminAuthAttempts.delete(key);
-      } else if (attempt.failures >= ADMIN_AUTH_RATE_LIMIT_MAX_FAILURES) {
-        const retryAfterSeconds = Math.ceil((attempt.resetAt - now) / 1000);
-        res.setHeader("Retry-After", String(retryAfterSeconds));
-        res.status(429).json({ error: "Too many admin authentication attempts" });
-        return false;
-      }
-    }
-
-    const configuredCredentials = resolveAdminCredentials();
-    if (!configuredCredentials) {
-      res.status(503).json({ error: "Admin authentication is not configured" });
-      return false;
-    }
-
-    const providedCredentials = parseBasicAuthHeader(
-      typeof req.headers.authorization === "string" ? req.headers.authorization : undefined
-    );
-    if (!providedCredentials) {
-      recordAdminAuthFailure(req);
-      res.setHeader("WWW-Authenticate", 'Basic realm="DeskGame Admin"');
-      res.status(401).json({ error: "Admin authentication required" });
-      return false;
-    }
-
-    const usernameMatches = constantTimeStringEquals(providedCredentials.username, configuredCredentials.username);
-    const passwordMatches = constantTimeStringEquals(providedCredentials.password, configuredCredentials.password);
-    if (!usernameMatches || !passwordMatches) {
-      recordAdminAuthFailure(req);
-      res.status(403).json({ error: "Invalid admin credentials" });
-      return false;
-    }
-
-    clearAdminAuthFailures(req);
-    return true;
-  }
+  const adminAuthRateLimit = rateLimit({
+    windowMs: 60_000,
+    limit: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipSuccessfulRequests: true,
+    keyGenerator: resolveAdminAuthKey,
+    handler: (_req: Request, res: Response) => {
+      res.status(429).json({ error: "Too many admin authentication attempts" });
+    },
+  });
 
   // Helper: persist a Room instance after a command
   function persist(room: Room): void {
@@ -366,25 +340,24 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
     return room;
   }
 
-  app.get(/^\/admin$/, (req: Request, res: Response) => {
-    if (!ensureAdminAccess(req, res)) return;
+  app.get(/^\/admin$/, adminAuthRateLimit, requireAdminAuth, (_req: Request, res: Response) => {
     res.redirect(308, "/admin/");
   });
 
-  app.get("/admin/api/overview", (req: Request, res: Response) => {
-    if (!ensureAdminAccess(req, res)) return;
+  app.get("/admin/api/overview", adminAuthRateLimit, requireAdminAuth, (_req: Request, res: Response) => {
     res.status(200).json(buildAdminOverview(rooms));
   });
 
-  app.get("/api/admin/overview", (req: Request, res: Response) => {
-    if (!ensureAdminAccess(req, res)) return;
+  app.get("/api/admin/overview", adminAuthRateLimit, requireAdminAuth, (_req: Request, res: Response) => {
     res.status(200).json(buildAdminOverview(rooms));
   });
 
-  app.use("/admin", (req: Request, res: Response, next: NextFunction) => {
-    if (!ensureAdminAccess(req, res)) return;
-    next();
-  }, express.static(resolveRepoPath("public", "admin"), { redirect: false }));
+  app.use(
+    "/admin",
+    adminAuthRateLimit,
+    requireAdminAuth,
+    express.static(resolveRepoPath("public", "admin"), { redirect: false })
+  );
 
   // ── POST /rooms ──────────────────────────────
   app.post("/rooms", (req: Request, res: Response, next: NextFunction) => {
