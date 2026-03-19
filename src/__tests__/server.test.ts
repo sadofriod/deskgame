@@ -10,7 +10,7 @@ function makeRequest(
   method: string,
   path: string,
   body?: JsonBody
-): Promise<{ status: number; body: JsonBody }> {
+): Promise<{ status: number; body: JsonBody | string }> {
   return new Promise((resolve, reject) => {
     const addr = server.address() as { port: number };
     const bodyStr = body ? JSON.stringify(body) : "";
@@ -29,9 +29,10 @@ function makeRequest(
       response.on("data", (chunk: Buffer) => chunks.push(chunk));
       response.on("end", () => {
         const raw = Buffer.concat(chunks).toString();
+        const contentType = response.headers["content-type"] ?? "";
         resolve({
           status: response.statusCode ?? 0,
-          body: raw ? (JSON.parse(raw) as JsonBody) : {},
+          body: raw && contentType.includes("application/json") ? (JSON.parse(raw) as JsonBody) : raw,
         });
       });
     });
@@ -45,10 +46,12 @@ describe("Express HTTP gateway", () => {
   let server: http.Server;
   let store: RoomStore;
   const OWNER = "owner-open-id";
+  const ORIGINAL_ADMIN_USERS = process.env.ADMIN_USERS;
 
   beforeEach(
     () =>
       new Promise<void>((resolve) => {
+        delete process.env.ADMIN_USERS;
         store = new Map();
         server = http.createServer(createApp(store));
         server.listen(0, "127.0.0.1", resolve);
@@ -58,6 +61,11 @@ describe("Express HTTP gateway", () => {
   afterEach(
     () =>
       new Promise<void>((resolve) => {
+        if (ORIGINAL_ADMIN_USERS === undefined) {
+          delete process.env.ADMIN_USERS;
+        } else {
+          process.env.ADMIN_USERS = ORIGINAL_ADMIN_USERS;
+        }
         server.close(() => resolve());
       })
   );
@@ -194,5 +202,45 @@ describe("Express HTTP gateway", () => {
     expect(advanceResponse.status).toBe(200);
     const room = (advanceResponse.body as { room: { currentStage: string } }).room;
     expect(room.currentStage).toBe("action");
+  });
+
+  it("aggregates admin overview stats and markdown docs", async () => {
+    process.env.ADMIN_USERS = JSON.stringify([
+      { id: "ops-1", name: "运营管理员", email: "ops@example.com", avatar: "https://example.com/admin.png" },
+    ]);
+
+    const roomId = await createRoom();
+    await joinPlayers(roomId, 1);
+
+    const response = await makeRequest(server, "GET", "/api/admin/overview");
+    expect(response.status).toBe(200);
+
+    const body = response.body as {
+      admins: Array<{ name: string; email: string }>;
+      stats: { onlineUserCount: number; activeRoomCount: number };
+      users: Array<{ openId: string; roomCodes: string[] }>;
+      rooms: Array<{ roomId: string; playerCount: number }>;
+      apiDocsMarkdown: string;
+    };
+
+    expect(body.admins).toEqual([
+      expect.objectContaining({ name: "运营管理员", email: "ops@example.com" }),
+    ]);
+    expect(body.stats.onlineUserCount).toBe(2);
+    expect(body.stats.activeRoomCount).toBe(1);
+    expect(body.rooms).toHaveLength(1);
+    expect(body.rooms[0]?.roomId).toBe(roomId);
+    expect(body.rooms[0]?.playerCount).toBe(2);
+    expect(body.users).toHaveLength(2);
+    expect(body.users.some((user) => user.openId === OWNER && user.roomCodes.length === 1)).toBe(true);
+    expect(body.apiDocsMarkdown).toContain("DeskGame Backend 接入文档");
+  });
+
+  it("serves the admin spa shell", async () => {
+    const response = await makeRequest(server, "GET", "/admin");
+    expect(response.status).toBe(200);
+    expect(typeof response.body).toBe("string");
+    expect(response.body).toContain("DeskGame 管理后台");
+    expect(response.body).toContain("/api/admin/overview");
   });
 });
