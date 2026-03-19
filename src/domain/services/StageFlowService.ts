@@ -1,27 +1,35 @@
-// StageFlowService – docs/implements/04-domain-services-impl.md
-// Enforces the single-direction stage FSM.
+import { Stage } from "../types";
 
-import { Stage, STAGE_ORDER } from "../types";
+export interface StageFlowInput {
+  current: Stage;
+  isFinal?: boolean;
+}
 
 export class StageFlowService {
-  /**
-   * Returns the next stage after the given current stage.
-   * After `vote` the floor increments and we return to `night`.
-   */
-  next(current: Stage): Stage {
-    const idx = STAGE_ORDER.indexOf(current);
-    if (idx === -1) {
-      throw new Error(`Unknown stage: ${current}`);
+  next(input: StageFlowInput): Stage {
+    if (input.current === Stage.discussionVote) {
+      return input.isFinal ? Stage.review : Stage.bet;
     }
-    // After vote, wrap back to night
-    const nextIdx = (idx + 1) % STAGE_ORDER.length;
-    return STAGE_ORDER[nextIdx];
+
+    switch (input.current) {
+      case Stage.lobby:
+        return Stage.roleSelection;
+      case Stage.roleSelection:
+        return Stage.bet;
+      case Stage.bet:
+        return Stage.action;
+      case Stage.action:
+        return Stage.settlement;
+      case Stage.settlement:
+        return Stage.discussionVote;
+      case Stage.review:
+        return Stage.review;
+      default:
+        throw new Error(`Unknown stage: ${input.current}`);
+    }
   }
 
-  /**
-   * Validates that `candidate` is a legal forward step from `current`.
-   */
-  isValidTransition(current: Stage, candidate: Stage): boolean {
-    return this.next(current) === candidate;
+  isValidTransition(current: Stage, candidate: Stage, isFinal = false): boolean {
+    return this.next({ current, isFinal }) === candidate;
   }
 }

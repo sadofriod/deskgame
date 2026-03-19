@@ -1,4 +1,4 @@
-// Tests for gateway/RoomRegistry and gateway/RoomGateway
+/// <reference types="jest" />
 
 import { createServer } from "http";
 import { Room } from "../domain/aggregates/Room";
@@ -15,7 +15,11 @@ import { io as connectClient, Socket } from "socket.io-client";
 describe("RoomRegistry", () => {
   it("stores and retrieves a room", () => {
     const registry = new RoomRegistry();
-    const room = Room.create({ requestId: "r1", ownerOpenId: "owner1", roleConfig: "independent" });
+    const room = Room.create({
+      requestId: "r1",
+      ownerOpenId: "owner1",
+      roomConfig: { playerCount: 5, roleConfig: "independent" },
+    });
     registry.set(room.id, room);
     expect(registry.get(room.id)).toBe(room);
   });
@@ -27,7 +31,11 @@ describe("RoomRegistry", () => {
 
   it("has() reflects presence correctly", () => {
     const registry = new RoomRegistry();
-    const room = Room.create({ requestId: "r2", ownerOpenId: "owner2", roleConfig: "independent" });
+    const room = Room.create({
+      requestId: "r2",
+      ownerOpenId: "owner2",
+      roomConfig: { playerCount: 5, roleConfig: "independent" },
+    });
     expect(registry.has(room.id)).toBe(false);
     registry.set(room.id, room);
     expect(registry.has(room.id)).toBe(true);
@@ -35,7 +43,11 @@ describe("RoomRegistry", () => {
 
   it("delete() removes a room", () => {
     const registry = new RoomRegistry();
-    const room = Room.create({ requestId: "r3", ownerOpenId: "owner3", roleConfig: "independent" });
+    const room = Room.create({
+      requestId: "r3",
+      ownerOpenId: "owner3",
+      roomConfig: { playerCount: 5, roleConfig: "independent" },
+    });
     registry.set(room.id, room);
     registry.delete(room.id);
     expect(registry.has(room.id)).toBe(false);
@@ -44,8 +56,8 @@ describe("RoomRegistry", () => {
   it("size() tracks count accurately", () => {
     const registry = new RoomRegistry();
     expect(registry.size()).toBe(0);
-    const r1 = Room.create({ requestId: "r4a", ownerOpenId: "o1", roleConfig: "independent" });
-    const r2 = Room.create({ requestId: "r4b", ownerOpenId: "o2", roleConfig: "independent" });
+    const r1 = Room.create({ requestId: "r4a", ownerOpenId: "o1", roomConfig: { playerCount: 5, roleConfig: "independent" } });
+    const r2 = Room.create({ requestId: "r4b", ownerOpenId: "o2", roomConfig: { playerCount: 5, roleConfig: "independent" } });
     registry.set(r1.id, r1);
     registry.set(r2.id, r2);
     expect(registry.size()).toBe(2);
@@ -55,8 +67,8 @@ describe("RoomRegistry", () => {
 
   it("roomIds() returns all registered ids", () => {
     const registry = new RoomRegistry();
-    const r1 = Room.create({ requestId: "r5a", ownerOpenId: "o1", roleConfig: "independent" });
-    const r2 = Room.create({ requestId: "r5b", ownerOpenId: "o2", roleConfig: "independent" });
+    const r1 = Room.create({ requestId: "r5a", ownerOpenId: "o1", roomConfig: { playerCount: 5, roleConfig: "independent" } });
+    const r2 = Room.create({ requestId: "r5b", ownerOpenId: "o2", roomConfig: { playerCount: 5, roleConfig: "independent" } });
     registry.set(r1.id, r1);
     registry.set(r2.id, r2);
     const ids = registry.roomIds();
@@ -71,7 +83,11 @@ describe("RoomRegistry", () => {
 
   it("getSnapshot() returns a valid snapshot for an existing room", () => {
     const registry = new RoomRegistry();
-    const room = Room.create({ requestId: "r6", ownerOpenId: "snap-owner", roleConfig: "independent" });
+    const room = Room.create({
+      requestId: "r6",
+      ownerOpenId: "snap-owner",
+      roomConfig: { playerCount: 5, roleConfig: "independent" },
+    });
     registry.set(room.id, room);
     const snap = registry.getSnapshot(room.id);
     expect(snap).toBeDefined();
@@ -146,7 +162,7 @@ describe("RoomGateway", () => {
       type: "COMMAND",
       name: "CreateRoom",
       requestId: "req-create-1",
-      payload: { ownerOpenId: "owner-ws", roleConfig: "independent" },
+      payload: { ownerOpenId: "owner-ws", roomConfig: { playerCount: 5, roleConfig: "independent" } },
     } as WsMessage);
 
     const msg = await eventPromise;
@@ -167,7 +183,7 @@ describe("RoomGateway", () => {
       type: "COMMAND",
       name: "CreateRoom",
       requestId: "req-create-2",
-      payload: { ownerOpenId: "owner-reg", roleConfig: "independent" },
+      payload: { ownerOpenId: "owner-reg", roomConfig: { playerCount: 5, roleConfig: "independent" } },
     } as WsMessage);
 
     const msg = await eventPromise;
@@ -189,7 +205,7 @@ describe("RoomGateway", () => {
       type: "COMMAND",
       name: "CreateRoom",
       requestId: "req-c3",
-      payload: { ownerOpenId: "owner-join", roleConfig: "independent" },
+      payload: { ownerOpenId: "owner-join", roomConfig: { playerCount: 5, roleConfig: "independent" } },
     } as WsMessage);
     const createMsg = await createPromise;
     const roomId = (createMsg.payload as Record<string, unknown>).roomId as string;
@@ -208,7 +224,7 @@ describe("RoomGateway", () => {
 
     const joinMsg = await joinEventPromise;
     expect(joinMsg.name).toBe("PlayerJoinedRoom");
-    expect((joinMsg.payload as Record<string, unknown>).playerCount).toBe(1);
+    expect((joinMsg.payload as Record<string, unknown>).playerCount).toBe(2);
 
     await cleanup();
   });
@@ -253,34 +269,22 @@ describe("RoomGateway", () => {
     await cleanup();
   });
 
-  it("owner receives StageAdvanced event after AdvanceStage command", async () => {
+  it("all ready players trigger RoleSelectionStarted", async () => {
     const { client, cleanup } = await createGateway();
 
     const ownerSocket = client();
     await new Promise<void>((resolve) => ownerSocket.on("connect", resolve).connect());
 
-    // Step 1: Create room – owner socket is subscribed to the room channel
     const createEvt = waitForEvent<WsMessage>(ownerSocket, "event");
     ownerSocket.emit("command", {
       type: "COMMAND",
       name: "CreateRoom",
       requestId: "adv-create",
-      payload: { ownerOpenId: "adv-owner", roleConfig: "independent" },
+      payload: { ownerOpenId: "adv-owner", roomConfig: { playerCount: 5, roleConfig: "independent" } },
     } as WsMessage);
     const createMsg = await createEvt;
     const roomId = (createMsg.payload as Record<string, unknown>).roomId as string;
 
-    // Step 2: Owner joins as a player
-    const joinEvt1 = waitForEvent<WsMessage>(ownerSocket, "event");
-    ownerSocket.emit("command", {
-      type: "COMMAND",
-      name: "JoinRoom",
-      requestId: "adv-join-0",
-      payload: { roomId, openId: "adv-owner", nickname: "Owner", avatar: "" },
-    } as WsMessage);
-    await joinEvt1;
-
-    // Step 3: Four more players join (separate sockets to avoid duplicate-openId errors)
     for (let i = 1; i <= 4; i++) {
       const s = client();
       await new Promise<void>((resolve) => s.on("connect", resolve).connect());
@@ -294,32 +298,32 @@ describe("RoomGateway", () => {
       await evt;
     }
 
-    // Step 4: Start game
-    const startEvt = waitForEvent<WsMessage>(ownerSocket, "event");
-    ownerSocket.emit("command", {
-      type: "COMMAND",
-      name: "StartGame",
-      requestId: "adv-start",
-      payload: { roomId, openId: "adv-owner", seed: "adv-seed" },
-    } as WsMessage);
-    await startEvt;
-
-    // Step 5: Advance stage and wait for StageAdvanced event
-    const stageEvt = new Promise<WsMessage>((resolve) => {
+    const readyEvt = new Promise<WsMessage>((resolve) => {
       ownerSocket.on("event", (msg: WsMessage) => {
-        if (msg.name === "StageAdvanced") resolve(msg);
+        if (msg.name === "RoleSelectionStarted") resolve(msg);
       });
     });
+
     ownerSocket.emit("command", {
       type: "COMMAND",
-      name: "AdvanceStage",
-      requestId: "adv-advance-1",
-      payload: { roomId, openId: "adv-owner" },
+      name: "SetReady",
+      requestId: "ready-owner",
+      payload: { roomId, openId: "adv-owner", ready: true },
     } as WsMessage);
+    for (let i = 1; i <= 4; i++) {
+      const s = client();
+      await new Promise<void>((resolve) => s.on("connect", resolve).connect());
+      s.emit("command", {
+        type: "COMMAND",
+        name: "SetReady",
+        requestId: `ready-${i}`,
+        payload: { roomId, openId: `adv-p${i}`, ready: true },
+      } as WsMessage);
+    }
 
-    const advMsg = await stageEvt;
-    expect(advMsg.name).toBe("StageAdvanced");
-    expect((advMsg.payload as Record<string, unknown>).currentStage).toBe(Stage.action);
+    const readyMsg = await readyEvt;
+    expect(readyMsg.name).toBe("RoleSelectionStarted");
+    expect((readyMsg.payload as Record<string, unknown>).currentStage).toBe(Stage.roleSelection);
 
     await cleanup();
   }, 15000);

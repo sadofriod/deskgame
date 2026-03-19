@@ -1,25 +1,16 @@
-// DealService – derived from docs/implements/04-domain-services-impl.md
-// Deterministic shuffle based on a seed string so results are reproducible.
-
-import { Role } from "../types";
-
-export type RoleConfig = "independent" | "faction";
+import { Role, RoleConfig, RoomConfig } from "../types";
 
 export interface DealServiceInput {
-  players: string[]; // openId list, order must be stable
-  roleConfig: RoleConfig;
+  players: string[];
+  roomConfig: RoomConfig;
   seed: string;
 }
 
-export interface RoleAssignment {
+export interface CandidateRoleAssignment {
   openId: string;
-  role: Role;
+  roles: Role[];
 }
 
-/**
- * Simple seeded PRNG (mulberry32) for reproducible shuffles.
- * Same seed + same input always produces the same output.
- */
 function seededRng(seed: string): () => number {
   let h = 0;
   for (let i = 0; i < seed.length; i++) {
@@ -44,33 +35,25 @@ function shuffle<T>(arr: T[], rng: () => number): T[] {
   return a;
 }
 
+function buildRolePool(roleConfig: RoleConfig): Role[] {
+  if (roleConfig === "independent") {
+    return [Role.fatter1, Role.fatter2, Role.passenger, Role.passenger];
+  }
+  return [Role.fatter, Role.passenger, Role.passenger, Role.passenger];
+}
+
+function pickCandidateRoles(rolePool: Role[], rng: () => number): Role[] {
+  return shuffle(rolePool, rng).slice(0, 3);
+}
+
 export class DealService {
-  deal(input: DealServiceInput): RoleAssignment[] {
-    const { players, roleConfig, seed } = input;
-    const rng = seededRng(seed);
-
-    const fatCount = Math.max(1, Math.floor(players.length / 3));
-    let roles: Role[];
-
-    if (roleConfig === "independent") {
-      roles = [
-        Role.fatter1,
-        ...Array(fatCount - 1 > 0 ? fatCount - 1 : 0).fill(Role.fatter2),
-        ...Array(players.length - fatCount).fill(Role.passenger),
-      ];
-    } else {
-      roles = [
-        ...Array(fatCount).fill(Role.fatter),
-        ...Array(players.length - fatCount).fill(Role.passenger),
-      ];
-    }
-
-    const shuffledRoles = shuffle(roles, rng);
-    const shuffledPlayers = shuffle([...players], rng);
-
-    return shuffledPlayers.map((openId, idx) => ({
+  deal(input: DealServiceInput): CandidateRoleAssignment[] {
+    const rng = seededRng(input.seed);
+    const rolePool = buildRolePool(input.roomConfig.roleConfig);
+    const orderedPlayers = shuffle([...input.players], rng);
+    return orderedPlayers.map((openId) => ({
       openId,
-      role: shuffledRoles[idx],
+      roles: pickCandidateRoles(rolePool, rng),
     }));
   }
 }

@@ -1,6 +1,3 @@
-// Match aggregate – docs/implements/03-round-match-impl.md
-// Accumulates round snapshots and the final winner result for replays.
-
 import { uuidv4 } from "../../utils/uuid";
 import { Round, WinnerResult } from "../types";
 
@@ -35,12 +32,10 @@ export class Match {
     return this.state.matchId;
   }
 
-  /** Append the completed round snapshot at floor end. */
   appendRound(round: Round): void {
     this.state.rounds.push({ ...round });
   }
 
-  /** Seal the match with the game winner. */
   finalize(winnerResult: WinnerResult): void {
     this.state.winnerResult = winnerResult;
   }

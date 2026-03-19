@@ -25,7 +25,10 @@
   "requestId": "uuid",
   "payload": {
     "ownerOpenId": "String",
-    "roleConfig": "String"
+    "roomConfig": {
+      "playerCount": 5,
+      "roleConfig": "independent"
+    }
   }
 }
 ```
@@ -45,30 +48,62 @@
 }
 ```
 
-### StartGame
+### UpdateRoomConfig
 
 ```json
 {
-  "name": "StartGame",
+  "name": "UpdateRoomConfig",
   "requestId": "uuid",
   "payload": {
     "roomId": "String",
     "openId": "String",
-    "seed": "String"
+    "roomConfig": {
+      "playerCount": 8,
+      "roleConfig": "faction"
+    }
   }
 }
 ```
 
-### SubmitAction
+### SetReady
 
 ```json
 {
-  "name": "SubmitAction",
+  "name": "SetReady",
   "requestId": "uuid",
   "payload": {
     "roomId": "String",
     "openId": "String",
-    "actionCard": "String"
+    "ready": true
+  }
+}
+```
+
+### ConfirmRoleSelection
+
+```json
+{
+  "name": "ConfirmRoleSelection",
+  "requestId": "uuid",
+  "payload": {
+    "roomId": "String",
+    "openId": "String",
+    "roleId": "String"
+  }
+}
+```
+
+### SubmitBet
+
+```json
+{
+  "name": "SubmitBet",
+  "requestId": "uuid",
+  "payload": {
+    "roomId": "String",
+    "openId": "String",
+    "actionCard": "String",
+    "passedBet": false
   }
 }
 ```
@@ -82,8 +117,21 @@
   "payload": {
     "roomId": "String",
     "openId": "String",
-    "voteTarget": "String",
-    "votePowerAtSubmit": 1
+    "voteTarget": "String"
+  }
+}
+```
+
+### AdvanceStage
+
+```json
+{
+  "name": "AdvanceStage",
+  "requestId": "uuid",
+  "payload": {
+    "roomId": "String",
+    "openId": "String",
+    "timeoutFlag": false
   }
 }
 ```
@@ -97,10 +145,11 @@
   "name": "RoomCreated",
   "payload": {
     "roomId": "String",
+    "roomCode": "123456",
     "ownerOpenId": "String",
     "gameState": "wait",
-    "currentFloor": 1,
-    "currentStage": "night",
+    "currentRound": 0,
+    "currentStage": "lobby",
     "version": 1
   }
 }
@@ -114,22 +163,87 @@
   "payload": {
     "roomId": "String",
     "openId": "String",
+    "seatNo": 1,
     "playerCount": 1,
     "version": 2
   }
 }
 ```
 
-### CardsDealt
+### RoomConfigUpdated
 
 ```json
 {
-  "name": "CardsDealt",
+  "name": "RoomConfigUpdated",
   "payload": {
     "roomId": "String",
-    "envDeck": ["EnvironmentCard"],
-    "roles": [{"openId": "String", "role": "String"}],
+    "roomConfig": {
+      "playerCount": 8,
+      "roleConfig": "faction"
+    },
+    "version": 3
+  }
+}
+```
+
+### PlayerReadyStateChanged
+
+```json
+{
+  "name": "PlayerReadyStateChanged",
+  "payload": {
+    "roomId": "String",
+    "openId": "String",
+    "ready": true,
+    "allReady": false,
+    "version": 4
+  }
+}
+```
+
+### RoleSelectionStarted
+
+```json
+{
+  "name": "RoleSelectionStarted",
+  "payload": {
+    "roomId": "String",
+    "candidateRoles": [
+      {"openId": "String", "roles": ["String", "String", "String"]}
+    ],
+    "currentStage": "roleSelection",
     "version": 10
+  }
+}
+```
+
+### RoleSelectionCompleted
+
+```json
+{
+  "name": "RoleSelectionCompleted",
+  "payload": {
+    "roomId": "String",
+    "currentRound": 1,
+    "currentStage": "bet",
+    "envDeck": ["EnvironmentCard"],
+    "version": 11
+  }
+}
+```
+
+### BetSubmitted
+
+```json
+{
+  "name": "BetSubmitted",
+  "payload": {
+    "roomId": "String",
+    "round": 1,
+    "openId": "String",
+    "passedBet": false,
+    "selectedAction": "scold",
+    "version": 12
   }
 }
 ```
@@ -141,9 +255,9 @@
   "name": "EnvironmentRevealed",
   "payload": {
     "roomId": "String",
-    "floor": 1,
+    "round": 1,
     "environmentCard": "EnvironmentCard",
-    "version": 11
+    "version": 13
   }
 }
 ```
@@ -155,12 +269,29 @@
   "name": "RoundSettled",
   "payload": {
     "roomId": "String",
-    "floor": 1,
+    "round": 1,
     "settlementResult": {
       "damages": [{"openId": "String", "damage": 1, "reason": "String"}],
+      "heals": [{"openId": "String", "heal": 1, "reason": "String"}],
       "eliminated": ["String"]
     },
-    "version": 12
+    "version": 14
+  }
+}
+```
+
+### VoteSubmitted
+
+```json
+{
+  "name": "VoteSubmitted",
+  "payload": {
+    "roomId": "String",
+    "round": 1,
+    "openId": "String",
+    "voteTarget": "String",
+    "votePowerAtSubmit": 1.5,
+    "version": 15
   }
 }
 ```
@@ -172,14 +303,15 @@
   "name": "VoteResolved",
   "payload": {
     "roomId": "String",
-    "floor": 1,
+    "round": 1,
     "voteResult": {
       "targetOpenId": "String",
       "votes": 2.5,
       "isTie": false,
-      "tieTargets": []
+      "tieTargets": [],
+      "needRevote": false
     },
-    "version": 13
+    "version": 16
   }
 }
 ```
@@ -206,7 +338,10 @@
 ```json
 {
   "players": ["openId"],
-  "roleConfig": "String",
+  "roomConfig": {
+    "playerCount": 8,
+    "roleConfig": "extended"
+  },
   "seed": "String"
 }
 ```
@@ -231,7 +366,8 @@
 ```json
 {
   "environmentCard": "EnvironmentCard",
-  "actionSubmissions": [{"openId": "String", "actionCard": "String"}],
+  "betSubmissions": [{"openId": "String", "selectedAction": "String", "passedBet": false}],
+  "actionTargets": [{"openId": "String", "targetOpenIds": ["String"]}],
   "players": [{"openId": "String", "hp": 4, "isAlive": true}]
 }
 ```
@@ -244,6 +380,7 @@
     "passenger": 3,
     "fatter": 1
   },
-  "currentFloor": 4
+  "currentRound": 4,
+  "allEliminated": false
 }
 ```

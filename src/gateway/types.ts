@@ -1,8 +1,12 @@
-// WebSocket message protocol – docs/implements/server-architecture.md §3.1
-// and docs/implements/05-domain-protocols.md
-
-import { ActionCard, EnvironmentCard, GameState, Role, Stage, WinnerCamp } from "../domain/types";
-import { RoleConfig } from "../domain/services/DealService";
+import {
+  ActionCard,
+  EnvironmentCard,
+  GameState,
+  Role,
+  RoomConfig,
+  Stage,
+  WinnerCamp,
+} from "../domain/types";
 
 // ──────────────────────────────────────────────
 // Message envelope
@@ -25,7 +29,7 @@ export interface WsMessage {
 
 export interface CreateRoomPayload {
   ownerOpenId: string;
-  roleConfig: RoleConfig;
+  roomConfig: RoomConfig;
 }
 
 export interface JoinRoomPayload {
@@ -40,27 +44,35 @@ export interface LeaveRoomPayload {
   openId: string;
 }
 
-export interface StartGamePayload {
+export interface UpdateRoomConfigPayload {
   roomId: string;
   openId: string;
-  seed: string;
+  roomConfig: RoomConfig;
 }
 
-export interface SubmitActionPayload {
+export interface SetReadyPayload {
   roomId: string;
   openId: string;
-  actionCard: ActionCard;
+  ready: boolean;
 }
 
-export interface RevealEnvironmentPayload {
+export interface ConfirmRoleSelectionPayload {
   roomId: string;
+  openId: string;
+  roleId: Role;
+}
+
+export interface SubmitBetPayload {
+  roomId: string;
+  openId: string;
+  actionCard?: ActionCard;
+  passedBet?: boolean;
 }
 
 export interface SubmitVotePayload {
   roomId: string;
   openId: string;
   voteTarget: string;
-  votePowerAtSubmit: number;
 }
 
 export interface AdvanceStagePayload {
@@ -75,9 +87,10 @@ export interface AdvanceStagePayload {
 
 export interface RoomCreatedEventPayload {
   roomId: string;
+  roomCode: string;
   ownerOpenId: string;
   gameState: GameState;
-  currentFloor: number;
+  currentRound: number;
   currentStage: Stage;
   version: number;
 }
@@ -85,6 +98,7 @@ export interface RoomCreatedEventPayload {
 export interface PlayerJoinedRoomEventPayload {
   roomId: string;
   openId: string;
+  seatNo: number;
   playerCount: number;
   version: number;
 }
@@ -96,32 +110,57 @@ export interface PlayerRemovedFromRoomEventPayload {
   version: number;
 }
 
-export interface CardsDealtEventPayload {
+export interface RoomConfigUpdatedEventPayload {
   roomId: string;
-  envDeck: EnvironmentCard[];
-  roles: Array<{ openId: string; role: Role }>;
+  roomConfig: RoomConfig;
   version: number;
 }
 
-export interface ActionSubmittedEventPayload {
+export interface PlayerReadyStateChangedEventPayload {
   roomId: string;
   openId: string;
-  actionCard: ActionCard;
+  ready: boolean;
+  allReady: boolean;
+  version: number;
+}
+
+export interface RoleSelectionStartedEventPayload {
+  roomId: string;
+  candidateRoles: Array<{ openId: string; roles: Role[] }>;
+  currentStage: Stage.roleSelection;
+  version: number;
+}
+
+export interface RoleSelectionCompletedEventPayload {
+  roomId: string;
+  currentRound: number;
+  currentStage: Stage.bet;
+  envDeck: EnvironmentCard[];
+  version: number;
+}
+
+export interface BetSubmittedEventPayload {
+  roomId: string;
+  round: number;
+  openId: string;
+  passedBet: boolean;
+  selectedAction: ActionCard | null;
   version: number;
 }
 
 export interface EnvironmentRevealedEventPayload {
   roomId: string;
-  floor: number;
+  round: number;
   environmentCard: EnvironmentCard;
   version: number;
 }
 
 export interface RoundSettledEventPayload {
   roomId: string;
-  floor: number;
+  round: number;
   settlementResult: {
     damages: Array<{ openId: string; damage: number; reason: string }>;
+    heals: Array<{ openId: string; heal: number; reason: string }>;
     eliminated: string[];
   };
   version: number;
@@ -130,12 +169,13 @@ export interface RoundSettledEventPayload {
 export interface PlayerEliminatedEventPayload {
   roomId: string;
   openId: string;
-  floor: number;
+  round: number;
   version: number;
 }
 
 export interface VoteSubmittedEventPayload {
   roomId: string;
+  round: number;
   openId: string;
   voteTarget: string;
   votePowerAtSubmit: number;
@@ -144,12 +184,13 @@ export interface VoteSubmittedEventPayload {
 
 export interface VoteResolvedEventPayload {
   roomId: string;
-  floor: number;
+  round: number;
   voteResult: {
-    targetOpenId: string;
+    targetOpenId: string | null;
     votes: number;
     isTie: boolean;
     tieTargets: string[];
+    needRevote: boolean;
   };
   version: number;
 }
@@ -158,7 +199,7 @@ export interface StageAdvancedEventPayload {
   roomId: string;
   previousStage: Stage;
   currentStage: Stage;
-  currentFloor: number;
+  currentRound: number;
   version: number;
 }
 

@@ -1,6 +1,6 @@
-·# Room Flow
+# Room Flow
 
-This document visualizes the Room aggregate lifecycle and stage flow.
+This document visualizes the Room aggregate lifecycle and stage flow aligned with the latest core business process.
 
 ## Command To Event Flow
 
@@ -9,40 +9,44 @@ flowchart TD
   A[Gateway Command] --> B{Room Aggregate}
   B -->|CreateRoom| C[RoomCreated]
   B -->|JoinRoom| D[PlayerJoinedRoom]
-  B -->|StartGame| E[CardsDealt]
-  B -->|SubmitAction| F[ActionSubmitted]
-  B -->|RevealEnvironment| G[EnvironmentRevealed]
-  B -->|SubmitVote| H[VoteSubmitted]
-  B -->|AdvanceStage| I[StageAdvanced]
-  B -->|AdvanceStage| J[RoundSettled]
-  B -->|AdvanceStage| K[VoteResolved]
-  B -->|AdvanceStage| L[WinnerDecided]
+  B -->|UpdateRoomConfig| E[RoomConfigUpdated]
+  B -->|SetReady| F[PlayerReadyStateChanged]
+  B -->|Auto when all ready| G[RoleSelectionStarted]
+  B -->|ConfirmRoleSelection| H[RoleSelectionCompleted]
+  B -->|SubmitBet| I[BetSubmitted]
+  B -->|AdvanceStage| J[EnvironmentRevealed]
+  B -->|SubmitVote| K[VoteSubmitted]
+  B -->|AdvanceStage| L[RoundSettled]
+  B -->|AdvanceStage| M[VoteResolved]
+  B -->|AdvanceStage| N[WinnerDecided]
 ```
 
 ## Stage Progression
 
 ```mermaid
 flowchart LR
-  N[night] --> A[action]
-  A --> E[env]
-  E --> R[actionResolve]
-  R --> H[hurt]
-  H --> T[talk]
-  T --> V[vote]
-  V -->|next floor| N
-  V -->|winner decided| X[end]
+  L[lobby] --> RS[roleSelection]
+  RS --> B[bet]
+  B --> A[action]
+  A --> S[settlement]
+  S --> DV[discussionVote]
+  DV -->|next round| B
+  DV -->|winner decided| R[review]
 ```
 
 ## Service Collaboration
 
 ```mermaid
 flowchart TD
-  S[StartGame] --> DS[DealService]
-  S --> ES[EnvironmentDeckService]
-  DS --> C[CardsDealt]
-  ES --> C
-  AR[actionResolve/hurt] --> SS[SettlementService]
-  SS --> RS[RoundSettled]
-  RS --> WS[WinnerJudgementService]
-  WS --> WD[WinnerDecided]
+  Ready[All players ready] --> DS[DealService]
+  DS --> RS[RoleSelectionStarted]
+  Select[All players selected roles] --> ES[EnvironmentDeckService]
+  ES --> RC[RoleSelectionCompleted]
+  Bet[All bets locked] --> ER[EnvironmentRevealed]
+  ER --> AX[Action execution]
+  AX --> SS[SettlementService]
+  SS --> ST[RoundSettled]
+  ST --> WS[WinnerJudgementService]
+  WS -->|final| WD[WinnerDecided]
+  WS -->|continue| DV[discussionVote]
 ```

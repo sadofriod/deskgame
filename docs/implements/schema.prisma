@@ -4,23 +4,23 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 enum GameState {
   wait
-  start
-  end
+  selecting
+  playing
+  ended
 }
 
 enum Stage {
-  night
+  lobby
+  roleSelection
+  bet
   action
-  env
-  actionResolve
-  hurt
-  talk
-  vote
+  settlement
+  discussionVote
+  review
 }
 
 enum Role {
@@ -48,11 +48,12 @@ enum EnvironmentCard {
 
 model Room {
   roomId       String   @id @db.VarChar(64)
+  roomCode     String   @unique @db.VarChar(6)
   ownerOpenId  String   @db.VarChar(64)
   gameState    GameState
   playerCount  Int
-  roleConfig   String   @db.VarChar(32)
-  currentFloor Int
+  roomConfig   Json
+  currentRound Int      @default(0)
   currentStage Stage
   envDeck      Json
   version      Int      @default(1)
@@ -65,18 +66,23 @@ model Room {
 }
 
 model Player {
-  roomId     String   @db.VarChar(64)
-  openId     String   @db.VarChar(64)
-  nickname   String   @db.VarChar(64)
-  avatar     String   @db.VarChar(256)
-  role       Role
-  hp         Int      @default(4)
-  votePower  Float    @default(1)
-  isAlive    Boolean  @default(true)
-  actionCard ActionCard?
-  voteTarget String?  @db.VarChar(64)
-  isReady    Boolean  @default(false)
-  joinTime   DateTime @default(now())
+  roomId        String      @db.VarChar(64)
+  openId        String      @db.VarChar(64)
+  nickname      String      @db.VarChar(64)
+  avatar        String      @db.VarChar(256)
+  seatNo        Int
+  candidateRoles Json?
+  selectedRole  Role?
+  hp            Int         @default(4)
+  votePower     Float       @default(1)
+  isAlive       Boolean     @default(true)
+  selectedAction ActionCard?
+  passedBet     Boolean     @default(false)
+  canSpeak      Boolean     @default(true)
+  canVote       Boolean     @default(true)
+  voteTarget    String?     @db.VarChar(64)
+  isReady       Boolean     @default(false)
+  joinTime      DateTime    @default(now())
 
   room Room @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
 
@@ -85,18 +91,20 @@ model Player {
 }
 
 model Round {
-  roomId            String           @db.VarChar(64)
-  floor             Int
-  environmentCard   EnvironmentCard?
-  actionSubmissions Json
-  voteSubmissions   Json
-  settlementResult  Json
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+  roomId           String           @db.VarChar(64)
+  round            Int
+  environmentCard  EnvironmentCard?
+  betSubmissions   Json
+  actionLogs       Json
+  voteSubmissions  Json
+  voteResult       Json
+  settlementResult Json
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
   room Room @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
 
-  @@id([roomId, floor])
+  @@id([roomId, round])
   @@index([roomId])
 }
 

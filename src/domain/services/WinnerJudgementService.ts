@@ -1,6 +1,3 @@
-// WinnerJudgementService – docs/implements/04-domain-services-impl.md
-// Evaluates win conditions after each settlement and vote.
-
 import { Role, WinnerCamp, WinnerResult } from "../types";
 
 export interface AliveByRole {
@@ -9,7 +6,8 @@ export interface AliveByRole {
 
 export interface JudgementInput {
   aliveByRole: AliveByRole;
-  currentFloor: number;
+  currentRound: number;
+  allEliminated?: boolean;
 }
 
 export interface JudgementResult {
@@ -18,6 +16,10 @@ export interface JudgementResult {
 }
 
 const FATTER_ROLES = new Set<string>([Role.fatter, Role.fatter1, Role.fatter2]);
+
+function buildWinnerResult(winnerCamp: WinnerCamp, reason: string): WinnerResult {
+  return { winnerCamp, reason, decidedAt: new Date() };
+}
 
 function countFatters(aliveByRole: AliveByRole): number {
   return Object.entries(aliveByRole)
@@ -31,66 +33,45 @@ function countPassengers(aliveByRole: AliveByRole): number {
 
 export class WinnerJudgementService {
   judge(input: JudgementInput): JudgementResult {
-    const { aliveByRole, currentFloor } = input;
-    const fatters = countFatters(aliveByRole);
-    const passengers = countPassengers(aliveByRole);
+    const fatters = countFatters(input.aliveByRole);
+    const passengers = countPassengers(input.aliveByRole);
     const total = fatters + passengers;
 
-    // Draw: no one alive
-    if (total === 0) {
+    if (input.allEliminated || total === 0) {
       return {
         isFinal: true,
-        winnerResult: {
-          winnerCamp: WinnerCamp.draw,
-          reason: "All players eliminated",
-          decidedAt: new Date(),
-        },
+        winnerResult: buildWinnerResult(WinnerCamp.draw, "All players eliminated"),
       };
     }
 
-    // Fatter wins: passengers cleared, or alive passengers <= alive fatters
     if (passengers === 0) {
       return {
         isFinal: true,
-        winnerResult: {
-          winnerCamp: WinnerCamp.fatter,
-          reason: "All passengers eliminated",
-          decidedAt: new Date(),
-        },
-      };
-    }
-    if (fatters > 0 && passengers <= fatters) {
-      return {
-        isFinal: true,
-        winnerResult: {
-          winnerCamp: WinnerCamp.fatter,
-          reason: "Alive passengers ≤ alive fatters",
-          decidedAt: new Date(),
-        },
+        winnerResult: buildWinnerResult(WinnerCamp.fatter, "All passengers eliminated"),
       };
     }
 
-    // Passenger wins: fatters wiped out
     if (fatters === 0) {
       return {
         isFinal: true,
-        winnerResult: {
-          winnerCamp: WinnerCamp.passenger,
-          reason: "All fatters eliminated",
-          decidedAt: new Date(),
-        },
+        winnerResult: buildWinnerResult(WinnerCamp.passenger, "All fatters eliminated"),
       };
     }
 
-    // Passenger wins: reached floor 8 end and still have more survivors
-    if (currentFloor >= 8 && passengers > fatters) {
+    if (passengers <= fatters) {
       return {
         isFinal: true,
-        winnerResult: {
-          winnerCamp: WinnerCamp.passenger,
-          reason: "Survived 8 floors with more passengers than fatters",
-          decidedAt: new Date(),
-        },
+        winnerResult: buildWinnerResult(WinnerCamp.fatter, "Alive passengers ≤ alive fatters"),
+      };
+    }
+
+    if (input.currentRound >= 8 && passengers > fatters) {
+      return {
+        isFinal: true,
+        winnerResult: buildWinnerResult(
+          WinnerCamp.passenger,
+          "Survived 8 rounds with more passengers than fatters"
+        ),
       };
     }
 

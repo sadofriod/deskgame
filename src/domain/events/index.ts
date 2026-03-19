@@ -1,11 +1,9 @@
-// Domain events derived from docs/domain/04-领域事件与服务.md
-// and docs/implements/05-domain-protocols.md
-
 import {
   ActionCard,
   EnvironmentCard,
   GameState,
   Role,
+  RoomConfig,
   SettlementResult,
   Stage,
   VoteResult,
@@ -16,8 +14,11 @@ export type DomainEventName =
   | "RoomCreated"
   | "PlayerJoinedRoom"
   | "PlayerRemovedFromRoom"
-  | "CardsDealt"
-  | "ActionSubmitted"
+  | "RoomConfigUpdated"
+  | "PlayerReadyStateChanged"
+  | "RoleSelectionStarted"
+  | "RoleSelectionCompleted"
+  | "BetSubmitted"
   | "EnvironmentRevealed"
   | "RoundSettled"
   | "PlayerEliminated"
@@ -34,15 +35,17 @@ export interface BaseDomainEvent {
 
 export interface RoomCreated extends BaseDomainEvent {
   name: "RoomCreated";
+  roomCode: string;
   ownerOpenId: string;
   gameState: GameState;
-  currentFloor: number;
+  currentRound: number;
   currentStage: Stage;
 }
 
 export interface PlayerJoinedRoom extends BaseDomainEvent {
   name: "PlayerJoinedRoom";
   openId: string;
+  seatNo: number;
   playerCount: number;
 }
 
@@ -52,38 +55,60 @@ export interface PlayerRemovedFromRoom extends BaseDomainEvent {
   playerCount: number;
 }
 
-export interface CardsDealt extends BaseDomainEvent {
-  name: "CardsDealt";
-  envDeck: EnvironmentCard[];
-  roles: Array<{ openId: string; role: Role }>;
+export interface RoomConfigUpdated extends BaseDomainEvent {
+  name: "RoomConfigUpdated";
+  roomConfig: RoomConfig;
 }
 
-export interface ActionSubmitted extends BaseDomainEvent {
-  name: "ActionSubmitted";
+export interface PlayerReadyStateChanged extends BaseDomainEvent {
+  name: "PlayerReadyStateChanged";
   openId: string;
-  actionCard: ActionCard;
+  ready: boolean;
+  allReady: boolean;
+}
+
+export interface RoleSelectionStarted extends BaseDomainEvent {
+  name: "RoleSelectionStarted";
+  candidateRoles: Array<{ openId: string; roles: Role[] }>;
+  currentStage: Stage.roleSelection;
+}
+
+export interface RoleSelectionCompleted extends BaseDomainEvent {
+  name: "RoleSelectionCompleted";
+  currentRound: number;
+  currentStage: Stage.bet;
+  envDeck: EnvironmentCard[];
+}
+
+export interface BetSubmitted extends BaseDomainEvent {
+  name: "BetSubmitted";
+  round: number;
+  openId: string;
+  passedBet: boolean;
+  selectedAction: ActionCard | null;
 }
 
 export interface EnvironmentRevealed extends BaseDomainEvent {
   name: "EnvironmentRevealed";
-  floor: number;
+  round: number;
   environmentCard: EnvironmentCard;
 }
 
 export interface RoundSettled extends BaseDomainEvent {
   name: "RoundSettled";
-  floor: number;
+  round: number;
   settlementResult: SettlementResult;
 }
 
 export interface PlayerEliminated extends BaseDomainEvent {
   name: "PlayerEliminated";
   openId: string;
-  floor: number;
+  round: number;
 }
 
 export interface VoteSubmitted extends BaseDomainEvent {
   name: "VoteSubmitted";
+  round: number;
   openId: string;
   voteTarget: string;
   votePowerAtSubmit: number;
@@ -91,7 +116,7 @@ export interface VoteSubmitted extends BaseDomainEvent {
 
 export interface VoteResolved extends BaseDomainEvent {
   name: "VoteResolved";
-  floor: number;
+  round: number;
   voteResult: VoteResult;
 }
 
@@ -99,7 +124,7 @@ export interface StageAdvanced extends BaseDomainEvent {
   name: "StageAdvanced";
   previousStage: Stage;
   currentStage: Stage;
-  currentFloor: number;
+  currentRound: number;
 }
 
 export interface WinnerDecided extends BaseDomainEvent {
@@ -113,8 +138,11 @@ export type DomainEvent =
   | RoomCreated
   | PlayerJoinedRoom
   | PlayerRemovedFromRoom
-  | CardsDealt
-  | ActionSubmitted
+  | RoomConfigUpdated
+  | PlayerReadyStateChanged
+  | RoleSelectionStarted
+  | RoleSelectionCompleted
+  | BetSubmitted
   | EnvironmentRevealed
   | RoundSettled
   | PlayerEliminated

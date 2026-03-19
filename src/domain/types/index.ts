@@ -1,29 +1,35 @@
-// Domain enums and value objects derived from docs/domain/02-值对象与枚举.md
+export type RoleConfig = "independent" | "faction";
+
+export interface RoomConfig {
+  playerCount: number;
+  roleConfig: RoleConfig;
+}
 
 export enum GameState {
   wait = "wait",
-  start = "start",
-  end = "end",
+  selecting = "selecting",
+  playing = "playing",
+  ended = "ended",
 }
 
 export enum Stage {
-  night = "night",
+  lobby = "lobby",
+  roleSelection = "roleSelection",
+  bet = "bet",
   action = "action",
-  env = "env",
-  actionResolve = "actionResolve",
-  hurt = "hurt",
-  talk = "talk",
-  vote = "vote",
+  settlement = "settlement",
+  discussionVote = "discussionVote",
+  review = "review",
 }
 
 export const STAGE_ORDER: Stage[] = [
-  Stage.night,
+  Stage.lobby,
+  Stage.roleSelection,
+  Stage.bet,
   Stage.action,
-  Stage.env,
-  Stage.actionResolve,
-  Stage.hurt,
-  Stage.talk,
-  Stage.vote,
+  Stage.settlement,
+  Stage.discussionVote,
+  Stage.review,
 ];
 
 export enum Role {
@@ -55,15 +61,12 @@ export enum WinnerCamp {
   draw = "draw",
 }
 
-// ──────────────────────────────────────────────
-// Value-object shapes
-// ──────────────────────────────────────────────
-
 export interface VoteResult {
-  targetOpenId: string;
+  targetOpenId: string | null;
   votes: number;
   isTie: boolean;
   tieTargets: string[];
+  needRevote: boolean;
 }
 
 export interface WinnerResult {
@@ -78,18 +81,22 @@ export interface DamageRecord {
   reason: string;
 }
 
+export interface HealRecord {
+  openId: string;
+  heal: number;
+  reason: string;
+}
+
 export interface SettlementResult {
   damages: DamageRecord[];
+  heals: HealRecord[];
   eliminated: string[];
 }
 
-// ──────────────────────────────────────────────
-// Submission sub-entities
-// ──────────────────────────────────────────────
-
-export interface ActionSubmission {
+export interface BetSubmission {
   openId: string;
-  actionCard: ActionCard;
+  selectedAction: ActionCard | null;
+  passedBet: boolean;
   submittedAt: Date;
 }
 
@@ -100,14 +107,19 @@ export interface VoteSubmission {
   submittedAt: Date;
 }
 
-// ──────────────────────────────────────────────
-// Round value object
-// ──────────────────────────────────────────────
+export interface ActionLog {
+  openId: string;
+  effect: string;
+  targetOpenIds: string[];
+}
 
 export interface Round {
-  floor: number;
+  round: number;
   environmentCard: EnvironmentCard | null;
-  actionSubmissions: ActionSubmission[];
+  betSubmissions: BetSubmission[];
+  actionLogs: ActionLog[];
   voteSubmissions: VoteSubmission[];
+  voteResult: VoteResult | null;
   settlementResult: SettlementResult | null;
+  revoteCount: number;
 }

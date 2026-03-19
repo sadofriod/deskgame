@@ -1,108 +1,168 @@
-# 服务端技术架构（WebSocket）
+# 服务端技术架构（当前实现）
 
 本文档的实现描述以 Node.js 作为后端语言。
 
-本文基于领域文档，描述服务端技术架构方案。核心通信采用 WebSocket，Redis 作为可选技术能力。
+本文基于当前代码实现，描述 DeskGame Backend 的服务端技术架构。当前仓库同时提供 HTTP 和 WebSocket 两种接入方式，运行态以单进程内存存储为主；Redis、PostgreSQL 和鉴权属于后续演进方向，不是本仓库当前已落地能力。
 
 ## 1. 架构目标与原则
 
 - 权威状态：服务器是唯一真相来源，所有阶段与结算以服务端计算为准。
-- 低延迟同步：行动提交、阶段推进、结算广播需实时推送。
+- 低延迟同步：押牌提交、阶段推进、结算广播需实时推送。
 - 可复验：发牌、环境牌序列等随机结果需可复验（同种子同输入）。
 - 阶段可控：阶段严格单向推进，不可回退。
-- 可扩展：支持单机到多实例的演进。
+- 可扩展：当前为单机内存模型，结构上保留向多实例演进的空间。
 
 ## 2. 总体架构
 
-- 接入层（Gateway）
-  - WebSocket 连接管理、鉴权、心跳、基础限流。
+- HTTP 接入层
+  - Express 路由将 JSON 请求映射到 Room 聚合命令。
+- WebSocket 接入层
+  - Socket.IO 接收 `command` 消息，转发为 Room 聚合命令，并把领域事件广播为 `event`。
 - 实时房间服务（Room Service）
-  - 维护 Room 聚合、玩家列表与阶段状态。
+  - `Room` 聚合维护房间、玩家、准备状态、身份选择、回合与阶段状态。
 - 规则与结算服务（Settlement Service）
-  - 执行伤害结算、票权计算、淘汰与胜负判断。
+  - 执行伤害结算、票权计算、不押牌惩罚、淘汰与胜负判断。
 - 牌堆与发牌服务（Deck/Deal Service）
-  - 生成环境牌序列、分配角色，支持可复验随机。
+  - 生成环境牌序列、候选角色组，支持可复验随机。
 - 复盘与记录服务（Match Service）
-  - 记录回合与阶段快照，产出复盘结构。
-- 持久化层（Storage）
-  - PostgreSQL（存储房间、玩家、回合、事件）。
-- 可选 Redis 能力
-  - 热状态缓存、房间分片、分布式锁、Pub/Sub。
+  - 当前仓库已有 `Match` 聚合定义，但未实现持久化复盘输出链路。
+- 内存存储层
+  - HTTP 使用 `RoomStore = Map<string, Room>`。
+  - WebSocket 使用 `RoomRegistry` 管理 `Room` 实例。
 
 ## 3. 通信模型
 
-### 3.1 WebSocket 消息协议（建议）
+### 3.1 HTTP 模型
+
+HTTP 接口通过 REST 风格命令入口驱动房间状态，例如：
+
+- `POST /rooms`
+- `POST /rooms/:roomId/players`
+- `POST /rooms/:roomId/config`
+- `POST /rooms/:roomId/ready`
+- `POST /rooms/:roomId/role-selection`
+- `POST /rooms/:roomId/bets`
+- `POST /rooms/:roomId/votes`
+- `POST /rooms/:roomId/stage/advance`
+- `GET /rooms/:roomId`
+
+每次写请求直接执行聚合命令，并返回：
+
+- `events`：当前命令产生的未提交领域事件
+- `room`：最新房间快照
+
+### 3.2 WebSocket 消息协议
 
 统一消息结构，便于幂等与追踪。
 
 ```json
 {
   "type": "COMMAND|EVENT|ERROR",
-  "name": "ActionSubmit",
+  "name": "CreateRoom",
   "requestId": "uuid",
-  "roomId": "String",
-  "openId": "String",
   "payload": {}
 }
 ```
 
-- COMMAND：客户端请求（提交行动、投票、准备、房主推进阶段）。
+- COMMAND：客户端请求（准备、确认角色、押牌、投票、房主改配置）。
 - EVENT：服务端推送（领域事件、阶段变更、结算结果）。
 - ERROR：错误响应（校验失败、状态冲突）。
 
-### 3.2 关键事件与推送
+Socket.IO 事件名固定为：
+
+- 客户端到服务端：`command`
+- 服务端到客户端：`event`
+- 服务端错误：`error`
+
+### 3.3 当前命令集与关键事件
+
+当前实现支持的命令：
+
+- `CreateRoom`
+- `JoinRoom`
+- `LeaveRoom`
+- `UpdateRoomConfig`
+- `SetReady`
+- `ConfirmRoleSelection`
+- `SubmitBet`
+- `SubmitVote`
+- `AdvanceStage`
 
 - RoomCreated / PlayerJoinedRoom / PlayerRemovedFromRoom
-- CardsDealt / EnvironmentRevealed
-- ActionSubmitted / VoteSubmitted
-- RoundSettled / PlayerEliminated
-- VoteResolved / WinnerDecided
+- RoomConfigUpdated / PlayerReadyStateChanged
+- RoleSelectionStarted / RoleSelectionCompleted
+- BetSubmitted / EnvironmentRevealed / StageAdvanced
+- RoundSettled / PlayerEliminated / VoteSubmitted / VoteResolved
+- WinnerDecided
 
-服务端推送必须包含最新房间快照或增量变更，客户端按版本号更新。
+当前 WebSocket 广播的是领域事件增量，不自动附带完整快照；客户端如需兜底同步，应调用 HTTP 快照接口拉取最新房间状态。
 
 ## 4. 领域模型映射
 
-- Room 聚合：房间核心状态、阶段、楼层、环境牌序列。
-- Player 实体：存活、行动牌、票权与投票目标。
-- Round 结构：行动提交、投票提交、结算结果。
-- Match 聚合：回合历史与胜负结果。
+- Room 聚合：房间核心状态、配置、准备、身份选择、回合阶段、环境牌序列、事件缓冲与幂等请求记录。
+- Player 实体：座位号、候选身份、最终身份、押牌状态、票权与投票目标。
+- Round 结构：押牌提交、行动记录、投票提交、投票结果与结算结果。
+- Match 聚合：类型层面的对局聚合，当前主流程仍由 `Room` 直接驱动。
 
 领域服务对应实现：
-- DealService：生成身份分配。
+- DealService：生成候选身份。
 - EnvironmentDeckService：生成环境牌序列。
-- StageFlowService：推进阶段与超时控制。
+- StageFlowService：推进阶段与最终回合判断。
 - SettlementService：伤害结算与票权计算。
 - WinnerJudgementService：胜利判定。
 
 ## 5. 状态管理与阶段推进
 
-- 每个 Room 维护 `currentStage` 与 `currentFloor`。
+- 每个 Room 维护 `currentStage` 与 `currentRound`。
 - 阶段推进采用有限状态机，严格按顺序推进：
-  - night -> action -> env -> actionResolve -> hurt -> talk -> vote
-- 行动提交与投票均需校验：
-  - 玩家存活、行动卡非空、阶段匹配。
-  - 提交后不可修改。
+  - lobby -> roleSelection -> bet -> action -> settlement -> discussionVote -> review
+- 大厅阶段校验：
+  - 仅房主可更新配置。
+  - 所有人 ready 后自动进入身份选择。
+- 身份选择阶段校验：
+  - 每名玩家只能从自己的候选身份中选择。
+  - 全员确认后自动进入 `bet`，并初始化环境牌堆与第 1 回合。
+- 押牌与投票均需校验：
+  - 玩家存活、阶段匹配、提交后不可修改。
+  - 不押牌玩家本回合不可发言且不可投票。
+- `advanceStage` 负责从 `bet -> action -> settlement -> discussionVote` 和回合切换。
 - 结算由服务端集中执行并广播结果。
 
-## 6. 数据存储设计（PostgreSQL）
+## 6. 当前存储实现
+
+当前仓库没有真正落库，所有状态都在进程内存中：
+
+- HTTP 模式下，`createApp()` 内部使用 `Map<string, Room>` 保存房间实例
+- WebSocket 模式下，`RoomRegistry` 保存房间实例
+- Socket 会话关系由 `RoomGateway.sessions` 保存 `socketId -> { roomId, openId }`
+
+这意味着：
+
+- 服务重启会丢失房间和对局数据
+- HTTP 与 WebSocket 默认不共享房间存储，除非在上层手动注入同一份 store / registry
+- 当前适合本地联调、规则开发和原型验证
+
+## 7. 数据库存储设计（后续演进）
 
 可参考领域文档结构草案，拆为以下表：
 
 - rooms
-  - roomId, ownerOpenId, gameState, playerCount, roleConfig,
-    currentFloor, currentStage, envDeck, version, createdAt
+  - roomId, roomCode, ownerOpenId, gameState, playerCount, roomConfig,
+    currentRound, currentStage, envDeck, version, createdAt
 - players
-  - roomId, openId, nickname, avatar, role, hp, votePower,
-    isAlive, actionCard, voteTarget, isReady, joinTime
+  - roomId, openId, nickname, avatar, seatNo, candidateRoles,
+    selectedRole, hp, votePower, isAlive, selectedAction, passedBet,
+    voteTarget, isReady, joinTime
 - rounds
-  - roomId, floor, environmentCard, actionSubmissions (jsonb),
-    voteSubmissions (jsonb), settlementResult (jsonb)
+  - roomId, round, environmentCard, betSubmissions (jsonb),
+    actionLogs (jsonb), voteSubmissions (jsonb), voteResult (jsonb),
+    settlementResult (jsonb)
 - matches
   - matchId, roomId, rounds (jsonb), winnerResult (jsonb)
 
 > 若采用事件溯源，可将领域事件追加到 events 表并异步构建快照。
 
-## 7. Redis 可选方案
+## 8. Redis 可选方案
 
 在多实例或高并发场景下启用：
 
@@ -117,41 +177,51 @@
 
 单机模式下可仅使用内存状态与单实例广播。
 
-## 8. 一致性与并发策略
+## 9. 一致性与并发策略
 
 - 房间级串行化：同一房间内的命令按顺序处理。
-- 乐观版本控制：命令携带 `roomVersion`，不匹配则拒绝。
-- 幂等处理：同一 `requestId` 重复提交应返回相同结果。
+- 版本单调递增：每次成功命令都会推动 `Room.version` 增加。
+- 幂等处理：`Room` 聚合记录 `requestId`，同一请求不会重复执行。
 
-## 9. 安全与鉴权
+当前实现没有对外暴露 `roomVersion` 入参校验，也没有跨进程并发保护。
 
-- WebSocket 连接建立时校验 openId 与签名。
-- 微信 Auth API 鉴权：
-  - 客户端通过微信登录获取 code，服务端以 code 换取会话信息。
-  - 服务端校验签名并解析 openId（必要时包含 unionId）。
-- 首次使用检测：
-  - 以 openId 作为唯一用户标识。
-  - 连接建立或首次请求时检查 users 表是否存在该 openId。
-  - 不存在则创建用户档案并标记为首次使用（用于新手引导或统计）。
-- 房主权限：仅房主可推进阶段与开局。
-- 数据最小化推送：身份牌仅对自己可见，广播中需脱敏。
+## 10. 安全与鉴权
 
-## 10. 可观测性与运维
+当前仓库尚未接入真实鉴权。
+
+当前约束只有：
+
+- `openId` 由客户端传入，服务端按其作为玩家标识处理
+- 房主权限由 `Room.ownerOpenId` 判定
+- 角色候选列表和玩家完整快照会出现在服务端返回中，尚未做面向不同客户端的字段裁剪
+
+如果要上线，需要至少补齐：
+
+- 登录态与签名校验
+- 用户身份绑定
+- 房间访问控制
+- 针对不同客户端的敏感字段脱敏
+
+## 11. 可观测性与运维
 
 - 结构化日志：按 roomId 与 requestId 关联。
 - 指标：在线连接数、房间数、平均延迟、阶段耗时。
 - 追踪：关键命令与结算步骤打点。
 
-## 11. 容错与恢复
+当前代码中尚未完整实现上述观测链路。
 
-- 断线重连：客户端重连后拉取房间快照与当前阶段。
+## 12. 容错与恢复
+
+- 断线重连：客户端可通过 HTTP 快照接口重新拉取房间状态。
 - 超时推进：StageFlowService 支持超时自动进入下一阶段。
-- 持久化优先：结算与胜负判定必须落库后再广播。
 
-## 12. 对应领域约束对照
+当前没有自动恢复、事件重放和持久化优先机制。
+
+## 13. 对应领域约束对照
 
 - 玩家数 5-10：创建/加入时校验。
 - 阶段不可回退：StageFlowService 单向约束。
-- 行动牌为空不可投票：VoteSubmitted 前置校验。
+- 身份未确认不可开局：RoleSelectionCompleted 前置校验。
+- 不押牌不可投票：VoteSubmitted 前置校验。
 - hp <= 0 必须出局：SettlementService 统一处理。
 - 胜负判定实时执行：WinnerJudgementService 在每次结算后运行。

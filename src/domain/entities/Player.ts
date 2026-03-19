@@ -1,17 +1,19 @@
-// Player entity derived from docs/implements/02-player-entity-impl.md
-// and docs/domain/01-实体与聚合.md
-
 import { ActionCard, Role } from "../types";
 
 export interface PlayerState {
   openId: string;
   nickname: string;
   avatar: string;
-  role: Role | null;
+  seatNo: number;
+  candidateRoles: Role[];
+  selectedRole: Role | null;
   hp: number;
   votePower: number;
   isAlive: boolean;
-  actionCard: ActionCard | null;
+  selectedAction: ActionCard | null;
+  passedBet: boolean;
+  canSpeak: boolean;
+  canVote: boolean;
   voteTarget: string | null;
   isReady: boolean;
   joinTime: Date;
@@ -24,17 +26,23 @@ export class Player {
     openId: string;
     nickname: string;
     avatar: string;
+    seatNo: number;
     joinTime?: Date;
   }) {
     this.state = {
       openId: params.openId,
       nickname: params.nickname,
       avatar: params.avatar,
-      role: null,
+      seatNo: params.seatNo,
+      candidateRoles: [],
+      selectedRole: null,
       hp: 4,
       votePower: 1,
       isAlive: true,
-      actionCard: null,
+      selectedAction: null,
+      passedBet: false,
+      canSpeak: true,
+      canVote: true,
       voteTarget: null,
       isReady: false,
       joinTime: params.joinTime ?? new Date(),
@@ -46,9 +54,10 @@ export class Player {
       openId: state.openId,
       nickname: state.nickname,
       avatar: state.avatar,
+      seatNo: state.seatNo,
       joinTime: state.joinTime,
     });
-    p.state = { ...state };
+    p.state = { ...state, candidateRoles: [...state.candidateRoles] };
     return p;
   }
 
@@ -60,10 +69,6 @@ export class Player {
     return this.state.isAlive;
   }
 
-  get actionCard(): ActionCard | null {
-    return this.state.actionCard;
-  }
-
   get votePower(): number {
     return this.state.votePower;
   }
@@ -72,78 +77,126 @@ export class Player {
     return this.state.hp;
   }
 
-  get role(): Role | null {
-    return this.state.role;
+  get selectedRole(): Role | null {
+    return this.state.selectedRole;
   }
 
   get isReady(): boolean {
     return this.state.isReady;
   }
 
+  get canVote(): boolean {
+    return this.state.canVote;
+  }
+
+  get seatNo(): number {
+    return this.state.seatNo;
+  }
+
+  get selectedAction(): ActionCard | null {
+    return this.state.selectedAction;
+  }
+
+  get passedBet(): boolean {
+    return this.state.passedBet;
+  }
+
+  get candidateRoles(): Role[] {
+    return [...this.state.candidateRoles];
+  }
+
   toState(): PlayerState {
-    return { ...this.state };
+    return { ...this.state, candidateRoles: [...this.state.candidateRoles] };
   }
 
-  /** CardsDealt: assign a role to the player. */
-  assignRole(role: Role): void {
-    this.state.role = role;
+  setSeatNo(seatNo: number): void {
+    this.state.seatNo = seatNo;
   }
 
-  /** action stage: update the current action card. */
-  drawActionCard(card: ActionCard): void {
-    this.state.actionCard = card;
-  }
-
-  /** Lock the action card upon submission (idempotent – already recorded in Round). */
-  submitAction(card: ActionCard): void {
-    this.state.actionCard = card;
-  }
-
-  /** Record vote target for this floor. */
-  submitVote(voteTarget: string): void {
-    if (!this.state.isAlive) {
-      throw new Error(`Player ${this.state.openId} is not alive and cannot vote`);
-    }
-    if (!this.state.actionCard) {
-      throw new Error(
-        `Player ${this.state.openId} has no action card and cannot vote`
-      );
-    }
-    this.state.voteTarget = voteTarget;
-  }
-
-  /** Apply damage to the player; marks eliminated when hp drops to zero. */
-  resolveDamage(damage: number): void {
-    this.state.hp = Math.max(0, this.state.hp - damage);
-    if (this.state.hp <= 0) {
-      this.state.isAlive = false;
-    }
-  }
-
-  /**
-   * Calculate and cache vote power for this floor.
-   * 骂 (scold) adds +0.5; eliminated or no action card => 0.
-   */
-  resolveVotePower(): number {
-    if (!this.state.isAlive || !this.state.actionCard) {
-      this.state.votePower = 0;
-      return 0;
-    }
-    const base = 1;
-    const bonus = this.state.actionCard === ActionCard.scold ? 0.5 : 0;
-    this.state.votePower = base + bonus;
-    return this.state.votePower;
-  }
-
-  /** Mark the player as ready. */
   setReady(ready: boolean): void {
     this.state.isReady = ready;
   }
 
-  /** Reset per-floor fields at the start of each night stage. */
-  resetFloor(): void {
-    this.state.actionCard = null;
+  setCandidateRoles(roles: Role[]): void {
+    this.state.candidateRoles = [...roles];
+  }
+
+  confirmRoleSelection(role: Role): void {
+    if (this.state.selectedRole) {
+      throw new Error(`Player ${this.state.openId} has already selected a role`);
+    }
+    if (!this.state.candidateRoles.includes(role)) {
+      throw new Error(`Role ${role} is not available for player ${this.state.openId}`);
+    }
+    this.state.selectedRole = role;
+  }
+
+  submitBet(input: { selectedAction?: ActionCard; passedBet?: boolean }): void {
+    const passedBet = input.passedBet === true;
+    const selectedAction = input.selectedAction ?? null;
+    if (!passedBet && !selectedAction) {
+      throw new Error("Either selectedAction or passedBet must be provided");
+    }
+    if (passedBet && selectedAction) {
+      throw new Error("Cannot submit an action card and passedBet together");
+    }
+    this.state.selectedAction = selectedAction;
+    this.state.passedBet = passedBet;
+  }
+
+  resolveDamage(damage: number): void {
+    this.state.hp = Math.max(0, this.state.hp - damage);
+    if (this.state.hp === 0) {
+      this.state.isAlive = false;
+      this.state.canSpeak = false;
+      this.state.canVote = false;
+      this.state.votePower = 0;
+    }
+  }
+
+  applyHeal(heal: number): void {
+    this.state.hp += heal;
+  }
+
+  eliminate(): void {
+    this.state.hp = 0;
+    this.state.isAlive = false;
+    this.state.canSpeak = false;
+    this.state.canVote = false;
+    this.state.votePower = 0;
+  }
+
+  resolveRoundPermission(): number {
+    if (!this.state.isAlive || this.state.passedBet) {
+      this.state.votePower = 0;
+      this.state.canSpeak = false;
+      this.state.canVote = false;
+      return 0;
+    }
+
+    this.state.canSpeak = true;
+    this.state.canVote = true;
+    this.state.votePower =
+      this.state.selectedAction === ActionCard.scold ? 1.5 : 1;
+    return this.state.votePower;
+  }
+
+  submitVote(voteTarget: string): void {
+    if (!this.state.isAlive) {
+      throw new Error(`Player ${this.state.openId} is not alive and cannot vote`);
+    }
+    if (!this.state.canVote) {
+      throw new Error(`Player ${this.state.openId} has no vote right this round`);
+    }
+    this.state.voteTarget = voteTarget;
+  }
+
+  resetRoundState(): void {
+    this.state.selectedAction = null;
+    this.state.passedBet = false;
     this.state.voteTarget = null;
-    this.state.votePower = 1;
+    this.state.votePower = this.state.isAlive ? 1 : 0;
+    this.state.canSpeak = this.state.isAlive;
+    this.state.canVote = this.state.isAlive;
   }
 }

@@ -3,8 +3,7 @@
 
 import express, { NextFunction, Request, Response } from "express";
 import { Room } from "../domain/aggregates/Room";
-import { ActionCard } from "../domain/types";
-import { RoleConfig } from "../domain/services/DealService";
+import { ActionCard, Role, RoleConfig, RoomConfig } from "../domain/types";
 import { uuidv4 } from "../utils/uuid";
 
 // ──────────────────────────────────────────────
@@ -21,6 +20,7 @@ export type RoomStore = Map<string, Room>;
 
 const VALID_ROLE_CONFIGS: ReadonlySet<string> = new Set<RoleConfig>(["independent", "faction"]);
 const VALID_ACTION_CARDS: ReadonlySet<string> = new Set(Object.values(ActionCard));
+const VALID_ROLES: ReadonlySet<string> = new Set(Object.values(Role));
 
 function validateRoleConfig(value: unknown): RoleConfig {
   if (typeof value !== "string" || !VALID_ROLE_CONFIGS.has(value)) {
@@ -40,6 +40,27 @@ function validateActionCard(value: unknown): ActionCard {
     );
   }
   return value as ActionCard;
+}
+
+function validateRoomConfig(value: unknown): RoomConfig {
+  if (!value || typeof value !== "object") {
+    throw Object.assign(new Error("roomConfig is required"), { status: 400 });
+  }
+  const roomConfig = value as { playerCount?: unknown; roleConfig?: unknown };
+  if (typeof roomConfig.playerCount !== "number" || roomConfig.playerCount < 5 || roomConfig.playerCount > 10) {
+    throw Object.assign(new Error("playerCount must be a number between 5 and 10"), { status: 400 });
+  }
+  return {
+    playerCount: roomConfig.playerCount,
+    roleConfig: validateRoleConfig(roomConfig.roleConfig),
+  };
+}
+
+function validateRole(value: unknown): Role {
+  if (typeof value !== "string" || !VALID_ROLES.has(value)) {
+    throw Object.assign(new Error(`Invalid roleId "${value}"`), { status: 400 });
+  }
+  return value as Role;
 }
 
 // ──────────────────────────────────────────────
@@ -76,16 +97,15 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   }
 
   // ── POST /rooms ──────────────────────────────
-  // Body: { ownerOpenId, roleConfig, requestId? }
   app.post("/rooms", (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { ownerOpenId, roleConfig: rawRoleConfig, requestId = uuidv4() } = req.body as {
+      const { ownerOpenId, roomConfig: rawRoomConfig, requestId = uuidv4() } = req.body as {
         ownerOpenId: string;
-        roleConfig: unknown;
+        roomConfig: unknown;
         requestId?: string;
       };
-      const roleConfig = validateRoleConfig(rawRoleConfig);
-      const room = Room.create({ requestId, ownerOpenId, roleConfig });
+      const roomConfig = validateRoomConfig(rawRoomConfig);
+      const room = Room.create({ requestId, ownerOpenId, roomConfig });
       persist(room);
       res.status(201).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
@@ -129,18 +149,34 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
     }
   });
 
-  // ── POST /rooms/:roomId/start ────────────────
-  // Body: { openId, seed, requestId? }
-  app.post("/rooms/:roomId/start", (req: Request, res: Response, next: NextFunction) => {
+  app.post("/rooms/:roomId/config", (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const { openId, seed, requestId = uuidv4() } = req.body as {
+      const { openId, roomConfig: rawRoomConfig, requestId = uuidv4() } = req.body as {
         openId: string;
-        seed: string;
+        roomConfig: unknown;
+        requestId?: string;
+      };
+      const roomConfig = validateRoomConfig(rawRoomConfig);
+      const room = loadRoom(roomId);
+      room.updateRoomConfig({ requestId, roomId, openId, roomConfig });
+      persist(room);
+      res.status(200).json({ events: room.events, room: room.snapshot() });
+    } catch (err) {
+      asDomainError(err); next(err);
+    }
+  });
+
+  app.post("/rooms/:roomId/ready", (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const roomId = String(req.params["roomId"]);
+      const { openId, ready, requestId = uuidv4() } = req.body as {
+        openId: string;
+        ready: boolean;
         requestId?: string;
       };
       const room = loadRoom(roomId);
-      room.startGame({ requestId, roomId, openId, seed });
+      room.setReady({ requestId, roomId, openId, ready });
       persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
@@ -148,19 +184,17 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
     }
   });
 
-  // ── POST /rooms/:roomId/actions ──────────────
-  // Body: { openId, actionCard, requestId? }
-  app.post("/rooms/:roomId/actions", (req: Request, res: Response, next: NextFunction) => {
+  app.post("/rooms/:roomId/role-selection", (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const { openId, actionCard: rawActionCard, requestId = uuidv4() } = req.body as {
+      const { openId, roleId: rawRoleId, requestId = uuidv4() } = req.body as {
         openId: string;
-        actionCard: unknown;
+        roleId: unknown;
         requestId?: string;
       };
-      const actionCard = validateActionCard(rawActionCard);
+      const roleId = validateRole(rawRoleId);
       const room = loadRoom(roomId);
-      room.submitAction({ requestId, roomId, openId, actionCard });
+      room.confirmRoleSelection({ requestId, roomId, openId, roleId });
       persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
@@ -168,14 +202,18 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
     }
   });
 
-  // ── POST /rooms/:roomId/environment ──────────
-  // Body: { requestId? }
-  app.post("/rooms/:roomId/environment", (req: Request, res: Response, next: NextFunction) => {
+  app.post("/rooms/:roomId/bets", (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const { requestId = uuidv4() } = (req.body ?? {}) as { requestId?: string };
+      const { openId, actionCard: rawActionCard, passedBet, requestId = uuidv4() } = req.body as {
+        openId: string;
+        actionCard?: unknown;
+        passedBet?: boolean;
+        requestId?: string;
+      };
+      const actionCard = rawActionCard === undefined ? undefined : validateActionCard(rawActionCard);
       const room = loadRoom(roomId);
-      room.revealEnvironment({ requestId, roomId });
+      room.submitBet({ requestId, roomId, openId, selectedAction: actionCard, passedBet });
       persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
@@ -183,19 +221,16 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
     }
   });
 
-  // ── POST /rooms/:roomId/votes ────────────────
-  // Body: { openId, voteTarget, votePowerAtSubmit, requestId? }
   app.post("/rooms/:roomId/votes", (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const { openId, voteTarget, votePowerAtSubmit, requestId = uuidv4() } = req.body as {
+      const { openId, voteTarget, requestId = uuidv4() } = req.body as {
         openId: string;
         voteTarget: string;
-        votePowerAtSubmit: number;
         requestId?: string;
       };
       const room = loadRoom(roomId);
-      room.submitVote({ requestId, roomId, openId, voteTarget, votePowerAtSubmit });
+      room.submitVote({ requestId, roomId, openId, voteTarget });
       persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {

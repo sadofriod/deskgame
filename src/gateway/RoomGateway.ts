@@ -10,16 +10,17 @@ import { DomainEvent } from "../domain/events";
 import {
   AdvanceStagePayload,
   ClientToServerEvents,
+  ConfirmRoleSelectionPayload,
   CreateRoomPayload,
   InterServerEvents,
   JoinRoomPayload,
   LeaveRoomPayload,
-  RevealEnvironmentPayload,
   ServerToClientEvents,
+  SetReadyPayload,
   SocketData,
-  StartGamePayload,
-  SubmitActionPayload,
+  SubmitBetPayload,
   SubmitVotePayload,
+  UpdateRoomConfigPayload,
   WsErrorPayload,
   WsMessage,
 } from "./types";
@@ -32,9 +33,10 @@ import { RoomRegistry } from "./RoomRegistry";
 const CMD_CREATE_ROOM = "CreateRoom";
 const CMD_JOIN_ROOM = "JoinRoom";
 const CMD_LEAVE_ROOM = "LeaveRoom";
-const CMD_START_GAME = "StartGame";
-const CMD_SUBMIT_ACTION = "SubmitAction";
-const CMD_REVEAL_ENVIRONMENT = "RevealEnvironment";
+const CMD_UPDATE_ROOM_CONFIG = "UpdateRoomConfig";
+const CMD_SET_READY = "SetReady";
+const CMD_CONFIRM_ROLE_SELECTION = "ConfirmRoleSelection";
+const CMD_SUBMIT_BET = "SubmitBet";
 const CMD_SUBMIT_VOTE = "SubmitVote";
 const CMD_ADVANCE_STAGE = "AdvanceStage";
 
@@ -143,14 +145,17 @@ export class RoomGateway {
       case CMD_LEAVE_ROOM:
         this.handleLeaveRoom(socketId, msg);
         break;
-      case CMD_START_GAME:
-        this.handleStartGame(socketId, msg);
+      case CMD_UPDATE_ROOM_CONFIG:
+        this.handleUpdateRoomConfig(socketId, msg);
         break;
-      case CMD_SUBMIT_ACTION:
-        this.handleSubmitAction(socketId, msg);
+      case CMD_SET_READY:
+        this.handleSetReady(socketId, msg);
         break;
-      case CMD_REVEAL_ENVIRONMENT:
-        this.handleRevealEnvironment(socketId, msg);
+      case CMD_CONFIRM_ROLE_SELECTION:
+        this.handleConfirmRoleSelection(socketId, msg);
+        break;
+      case CMD_SUBMIT_BET:
+        this.handleSubmitBet(socketId, msg);
         break;
       case CMD_SUBMIT_VOTE:
         this.handleSubmitVote(socketId, msg);
@@ -166,12 +171,12 @@ export class RoomGateway {
   private handleCreateRoom(socketId: string, msg: WsMessage): void {
     const p = msg.payload as unknown as CreateRoomPayload;
     if (!p.ownerOpenId) throw new Error("ownerOpenId is required");
-    if (!p.roleConfig) throw new Error("roleConfig is required");
+    if (!p.roomConfig) throw new Error("roomConfig is required");
 
     const room = Room.create({
       requestId: msg.requestId ?? socketId,
       ownerOpenId: p.ownerOpenId,
-      roleConfig: p.roleConfig,
+      roomConfig: p.roomConfig,
     });
 
     this.registry.set(room.id, room);
@@ -217,48 +222,67 @@ export class RoomGateway {
     this.broadcastEvents(room);
   }
 
-  private handleStartGame(socketId: string, msg: WsMessage): void {
-    const p = msg.payload as unknown as StartGamePayload;
+  private handleUpdateRoomConfig(socketId: string, msg: WsMessage): void {
+    const p = msg.payload as unknown as UpdateRoomConfigPayload;
     if (!p.roomId) throw new Error("roomId is required");
     if (!p.openId) throw new Error("openId is required");
-    if (!p.seed) throw new Error("seed is required");
+    if (!p.roomConfig) throw new Error("roomConfig is required");
     const room = this.requireRoom(p.roomId);
 
-    room.startGame({
+    room.updateRoomConfig({
       requestId: msg.requestId ?? socketId,
       roomId: p.roomId,
       openId: p.openId,
-      seed: p.seed,
+      roomConfig: p.roomConfig,
     });
 
     this.broadcastEvents(room);
   }
 
-  private handleSubmitAction(socketId: string, msg: WsMessage): void {
-    const p = msg.payload as unknown as SubmitActionPayload;
+  private handleSetReady(socketId: string, msg: WsMessage): void {
+    const p = msg.payload as unknown as SetReadyPayload;
     if (!p.roomId) throw new Error("roomId is required");
     if (!p.openId) throw new Error("openId is required");
-    if (!p.actionCard) throw new Error("actionCard is required");
     const room = this.requireRoom(p.roomId);
 
-    room.submitAction({
+    room.setReady({
       requestId: msg.requestId ?? socketId,
       roomId: p.roomId,
       openId: p.openId,
-      actionCard: p.actionCard,
+      ready: p.ready,
     });
 
     this.broadcastEvents(room);
   }
 
-  private handleRevealEnvironment(socketId: string, msg: WsMessage): void {
-    const p = msg.payload as unknown as RevealEnvironmentPayload;
+  private handleConfirmRoleSelection(socketId: string, msg: WsMessage): void {
+    const p = msg.payload as unknown as ConfirmRoleSelectionPayload;
     if (!p.roomId) throw new Error("roomId is required");
+    if (!p.openId) throw new Error("openId is required");
     const room = this.requireRoom(p.roomId);
 
-    room.revealEnvironment({
+    room.confirmRoleSelection({
       requestId: msg.requestId ?? socketId,
       roomId: p.roomId,
+      openId: p.openId,
+      roleId: p.roleId,
+    });
+
+    this.broadcastEvents(room);
+  }
+
+  private handleSubmitBet(socketId: string, msg: WsMessage): void {
+    const p = msg.payload as unknown as SubmitBetPayload;
+    if (!p.roomId) throw new Error("roomId is required");
+    if (!p.openId) throw new Error("openId is required");
+    const room = this.requireRoom(p.roomId);
+
+    room.submitBet({
+      requestId: msg.requestId ?? socketId,
+      roomId: p.roomId,
+      openId: p.openId,
+      selectedAction: p.actionCard,
+      passedBet: p.passedBet,
     });
 
     this.broadcastEvents(room);
@@ -269,7 +293,6 @@ export class RoomGateway {
     if (!p.roomId) throw new Error("roomId is required");
     if (!p.openId) throw new Error("openId is required");
     if (!p.voteTarget) throw new Error("voteTarget is required");
-    if (typeof p.votePowerAtSubmit !== "number") throw new Error("votePowerAtSubmit must be a number");
     const room = this.requireRoom(p.roomId);
 
     room.submitVote({
@@ -277,7 +300,6 @@ export class RoomGateway {
       roomId: p.roomId,
       openId: p.openId,
       voteTarget: p.voteTarget,
-      votePowerAtSubmit: p.votePowerAtSubmit,
     });
 
     this.broadcastEvents(room);
@@ -286,7 +308,9 @@ export class RoomGateway {
   private handleAdvanceStage(socketId: string, msg: WsMessage): void {
     const p = msg.payload as unknown as AdvanceStagePayload;
     if (!p.roomId) throw new Error("roomId is required");
-    if (!p.openId && !p.timeoutFlag) throw new Error("Either openId or timeoutFlag must be provided");
+    if (!p.openId && !p.timeoutFlag) {
+      throw new Error("Either openId or timeoutFlag must be provided");
+    }
     const room = this.requireRoom(p.roomId);
 
     room.advanceStage({
