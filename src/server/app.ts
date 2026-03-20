@@ -124,15 +124,25 @@ type AdminOverviewRoom = {
   }>;
 };
 
+const resolvedRepoPathCache = new Map<string, string>();
+
 function resolveRepoPath(...segments: string[]): string {
   const appRoot = process.env.APP_ROOT?.trim();
+  const cacheKey = JSON.stringify([appRoot ?? "", process.cwd(), segments]);
+  const cachedPath = resolvedRepoPathCache.get(cacheKey);
+  if (cachedPath) {
+    return cachedPath;
+  }
+
   const candidates = [
     appRoot ? path.resolve(appRoot, ...segments) : null,
     path.resolve(process.cwd(), ...segments),
     path.resolve(__dirname, "..", "..", ...segments),
   ].filter((candidate): candidate is string => Boolean(candidate));
 
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+  const resolvedPath = candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[candidates.length - 1];
+  resolvedRepoPathCache.set(cacheKey, resolvedPath);
+  return resolvedPath;
 }
 
 function resolveAdminUsers(): AdminUser[] {
