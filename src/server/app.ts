@@ -125,7 +125,14 @@ type AdminOverviewRoom = {
 };
 
 function resolveRepoPath(...segments: string[]): string {
-  return path.resolve(__dirname, "..", "..", ...segments);
+  const appRoot = process.env.APP_ROOT?.trim();
+  const candidates = [
+    appRoot ? path.resolve(appRoot, ...segments) : null,
+    path.resolve(process.cwd(), ...segments),
+    path.resolve(__dirname, "..", "..", ...segments),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
 }
 
 function resolveAdminUsers(): AdminUser[] {

@@ -7,7 +7,7 @@
     "doc": "docs"
   },
   "scripts": {
-    "postinstall": "node scripts/copy-admin-vendor.mjs && prisma generate",
+    "postinstall": "node scripts/copy-admin-vendor.mjs",
     "prebuild": "node scripts/copy-admin-vendor.mjs && prisma generate",
     "build": "tsc",
     "start": "node dist/server/index.js",

@@ -51,6 +51,7 @@ describe("Express HTTP gateway", () => {
   const ORIGINAL_ADMIN_USERS = process.env.ADMIN_USERS;
   const ORIGINAL_ADMIN_AUTH_USERNAME = process.env.ADMIN_AUTH_USERNAME;
   const ORIGINAL_ADMIN_AUTH_PASSWORD = process.env.ADMIN_AUTH_PASSWORD;
+  const ORIGINAL_APP_ROOT = process.env.APP_ROOT;
   const ADMIN_AUTH_HEADER = `Basic ${Buffer.from("desk-admin:secret-pass").toString("base64")}`;
 
   beforeEach(
@@ -59,6 +60,7 @@ describe("Express HTTP gateway", () => {
         delete process.env.ADMIN_USERS;
         process.env.ADMIN_AUTH_USERNAME = "desk-admin";
         process.env.ADMIN_AUTH_PASSWORD = "secret-pass";
+        delete process.env.APP_ROOT;
         store = new Map();
         server = http.createServer(createApp(store));
         server.listen(0, "127.0.0.1", resolve);
@@ -82,6 +84,11 @@ describe("Express HTTP gateway", () => {
           delete process.env.ADMIN_AUTH_PASSWORD;
         } else {
           process.env.ADMIN_AUTH_PASSWORD = ORIGINAL_ADMIN_AUTH_PASSWORD;
+        }
+        if (ORIGINAL_APP_ROOT === undefined) {
+          delete process.env.APP_ROOT;
+        } else {
+          process.env.APP_ROOT = ORIGINAL_APP_ROOT;
         }
         server.close(() => resolve());
       })
@@ -284,6 +291,18 @@ describe("Express HTTP gateway", () => {
     expect(response.status).toBe(200);
     expect(typeof response.body).toBe("string");
     expect(response.body).toContain("DeskGame 服务入口");
+  });
+
+  it("resolves static assets from APP_ROOT when provided", async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    process.env.APP_ROOT = process.cwd();
+    server = http.createServer(createApp(store));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    const response = await makeRequest(server, "GET", "/index.html");
+    expect(response.status).toBe(200);
+    expect(typeof response.body).toBe("string");
+    expect(response.body).toContain("DeskGame 已部署");
   });
 
   it("rejects unauthenticated admin requests", async () => {
