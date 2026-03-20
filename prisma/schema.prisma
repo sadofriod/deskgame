@@ -111,3 +111,15 @@ model Match {
 
   @@index([roomId])
 }
+
+model PersistedRoom {
+  roomId      String   @id @db.VarChar(64)
+  roomCode    String   @db.VarChar(16)
+  ownerOpenId String   @db.VarChar(64)
+  snapshot    Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([roomCode])
+  @@index([ownerOpenId])
+}

@@ -8,15 +8,10 @@ import express, { NextFunction, Request, Response } from "express";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { Room, RoomSnapshot } from "../domain/aggregates/Room";
 import { ActionCard, GameState, Role, RoleConfig, RoomConfig } from "../domain/types";
+import { createRoomRepository, RoomRepository, RoomStore } from "./roomRepository";
 import { uuidv4 } from "../utils/uuid";
 
-// ──────────────────────────────────────────────
-// In-memory room store type
-// Stores Room instances directly so that all in-memory state (including
-// idempotency request tracking) is preserved across HTTP calls.
-// ──────────────────────────────────────────────
-
-export type RoomStore = Map<string, Room>;
+export type { RoomStore } from "./roomRepository";
 
 // ──────────────────────────────────────────────
 // Validation helpers
@@ -242,8 +237,8 @@ function requireAdminAuth(req: Request, res: Response, next: NextFunction): void
   next();
 }
 
-function buildAdminOverview(rooms: RoomStore) {
-  const snapshots = [...rooms.values()].map((room) => room.snapshot());
+async function buildAdminOverview(roomRepository: RoomRepository) {
+  const snapshots = (await roomRepository.list()).map((room) => room.snapshot());
   const activeRooms = snapshots
     .filter((room) => room.playerCount > 0 && room.gameState !== GameState.ended)
     .sort((left, right) => right.playerCount - left.playerCount || left.roomCode.localeCompare(right.roomCode));
@@ -315,6 +310,7 @@ function buildAdminOverview(rooms: RoomStore) {
 
 export function createApp(rooms: RoomStore = new Map()): express.Application {
   const app = express();
+  const roomRepository = createRoomRepository(rooms);
   app.use(express.json());
   const adminAuthRateLimit = rateLimit({
     windowMs: 60_000,
@@ -329,27 +325,37 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   });
 
   // Helper: persist a Room instance after a command
-  function persist(room: Room): void {
-    rooms.set(room.id, room);
+  async function persist(room: Room): Promise<void> {
+    await roomRepository.save(room);
   }
 
   // Helper: load a Room from the store or 404
-  function loadRoom(roomId: string): Room {
-    const room = rooms.get(roomId);
+  async function loadRoom(roomId: string): Promise<Room> {
+    const room = await roomRepository.get(roomId);
     if (!room) throw Object.assign(new Error(`Room ${roomId} not found`), { status: 404 });
     return room;
   }
+
+  const publicIndexPath = resolveRepoPath("public", "index.html");
+
+  app.get("/", (_req: Request, res: Response) => {
+    res.sendFile(publicIndexPath);
+  });
+
+  app.get("/index.html", (_req: Request, res: Response) => {
+    res.sendFile(publicIndexPath);
+  });
 
   app.get(/^\/admin$/, adminAuthRateLimit, requireAdminAuth, (_req: Request, res: Response) => {
     res.redirect(308, "/admin/");
   });
 
-  app.get("/admin/api/overview", adminAuthRateLimit, requireAdminAuth, (_req: Request, res: Response) => {
-    res.status(200).json(buildAdminOverview(rooms));
+  app.get("/admin/api/overview", adminAuthRateLimit, requireAdminAuth, async (_req: Request, res: Response) => {
+    res.status(200).json(await buildAdminOverview(roomRepository));
   });
 
-  app.get("/api/admin/overview", adminAuthRateLimit, requireAdminAuth, (_req: Request, res: Response) => {
-    res.status(200).json(buildAdminOverview(rooms));
+  app.get("/api/admin/overview", adminAuthRateLimit, requireAdminAuth, async (_req: Request, res: Response) => {
+    res.status(200).json(await buildAdminOverview(roomRepository));
   });
 
   app.use(
@@ -360,7 +366,7 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   );
 
   // ── POST /rooms ──────────────────────────────
-  app.post("/rooms", (req: Request, res: Response, next: NextFunction) => {
+  app.post("/rooms", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { ownerOpenId, roomConfig: rawRoomConfig, requestId = uuidv4() } = req.body as {
         ownerOpenId: string;
@@ -369,7 +375,7 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
       };
       const roomConfig = validateRoomConfig(rawRoomConfig);
       const room = Room.create({ requestId, ownerOpenId, roomConfig });
-      persist(room);
+      await persist(room);
       res.status(201).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
       asDomainError(err); next(err);
@@ -378,7 +384,7 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
 
   // ── POST /rooms/:roomId/players ──────────────
   // Body: { openId, nickname, avatar, requestId? }
-  app.post("/rooms/:roomId/players", (req: Request, res: Response, next: NextFunction) => {
+  app.post("/rooms/:roomId/players", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
       const { openId, nickname, avatar, requestId = uuidv4() } = req.body as {
@@ -387,9 +393,9 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
         avatar: string;
         requestId?: string;
       };
-      const room = loadRoom(roomId);
+      const room = await loadRoom(roomId);
       room.joinRoom({ requestId, roomId, openId, nickname, avatar });
-      persist(room);
+      await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
       asDomainError(err); next(err);
@@ -398,21 +404,21 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
 
   // ── DELETE /rooms/:roomId/players/:openId ────
   // Remove a player from the room (leave).
-  app.delete("/rooms/:roomId/players/:openId", (req: Request, res: Response, next: NextFunction) => {
+  app.delete("/rooms/:roomId/players/:openId", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
       const openId = String(req.params["openId"]);
       const { requestId = uuidv4() } = (req.body ?? {}) as { requestId?: string };
-      const room = loadRoom(roomId);
+      const room = await loadRoom(roomId);
       room.leaveRoom({ requestId, roomId, openId });
-      persist(room);
+      await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
       asDomainError(err); next(err);
     }
   });
 
-  app.post("/rooms/:roomId/config", (req: Request, res: Response, next: NextFunction) => {
+  app.post("/rooms/:roomId/config", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
       const { openId, roomConfig: rawRoomConfig, requestId = uuidv4() } = req.body as {
@@ -421,16 +427,16 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
         requestId?: string;
       };
       const roomConfig = validateRoomConfig(rawRoomConfig);
-      const room = loadRoom(roomId);
+      const room = await loadRoom(roomId);
       room.updateRoomConfig({ requestId, roomId, openId, roomConfig });
-      persist(room);
+      await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
       asDomainError(err); next(err);
     }
   });
 
-  app.post("/rooms/:roomId/ready", (req: Request, res: Response, next: NextFunction) => {
+  app.post("/rooms/:roomId/ready", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
       const { openId, ready, requestId = uuidv4() } = req.body as {
@@ -438,16 +444,16 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
         ready: boolean;
         requestId?: string;
       };
-      const room = loadRoom(roomId);
+      const room = await loadRoom(roomId);
       room.setReady({ requestId, roomId, openId, ready });
-      persist(room);
+      await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
       asDomainError(err); next(err);
     }
   });
 
-  app.post("/rooms/:roomId/role-selection", (req: Request, res: Response, next: NextFunction) => {
+  app.post("/rooms/:roomId/role-selection", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
       const { openId, roleId: rawRoleId, requestId = uuidv4() } = req.body as {
@@ -456,16 +462,16 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
         requestId?: string;
       };
       const roleId = validateRole(rawRoleId);
-      const room = loadRoom(roomId);
+      const room = await loadRoom(roomId);
       room.confirmRoleSelection({ requestId, roomId, openId, roleId });
-      persist(room);
+      await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
       asDomainError(err); next(err);
     }
   });
 
-  app.post("/rooms/:roomId/bets", (req: Request, res: Response, next: NextFunction) => {
+  app.post("/rooms/:roomId/bets", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
       const { openId, actionCard: rawActionCard, passedBet, requestId = uuidv4() } = req.body as {
@@ -475,16 +481,16 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
         requestId?: string;
       };
       const actionCard = rawActionCard === undefined ? undefined : validateActionCard(rawActionCard);
-      const room = loadRoom(roomId);
+      const room = await loadRoom(roomId);
       room.submitBet({ requestId, roomId, openId, selectedAction: actionCard, passedBet });
-      persist(room);
+      await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
       asDomainError(err); next(err);
     }
   });
 
-  app.post("/rooms/:roomId/votes", (req: Request, res: Response, next: NextFunction) => {
+  app.post("/rooms/:roomId/votes", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
       const { openId, voteTarget, requestId = uuidv4() } = req.body as {
@@ -492,9 +498,9 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
         voteTarget: string;
         requestId?: string;
       };
-      const room = loadRoom(roomId);
+      const room = await loadRoom(roomId);
       room.submitVote({ requestId, roomId, openId, voteTarget });
-      persist(room);
+      await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
       asDomainError(err); next(err);
@@ -503,7 +509,7 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
 
   // ── POST /rooms/:roomId/stage/advance ────────
   // Body: { openId, timeoutFlag?, requestId? }
-  app.post("/rooms/:roomId/stage/advance", (req: Request, res: Response, next: NextFunction) => {
+  app.post("/rooms/:roomId/stage/advance", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
       const { openId, timeoutFlag, requestId = uuidv4() } = req.body as {
@@ -511,9 +517,9 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
         timeoutFlag?: boolean;
         requestId?: string;
       };
-      const room = loadRoom(roomId);
+      const room = await loadRoom(roomId);
       room.advanceStage({ requestId, roomId, openId, timeoutFlag });
-      persist(room);
+      await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
       asDomainError(err); next(err);
@@ -521,10 +527,10 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   });
 
   // ── GET /rooms/:roomId ───────────────────────
-  app.get("/rooms/:roomId", (req: Request, res: Response, next: NextFunction) => {
+  app.get("/rooms/:roomId", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const room = rooms.get(roomId);
+      const room = await roomRepository.get(roomId);
       if (!room) {
         res.status(404).json({ error: `Room ${roomId} not found` });
         return;

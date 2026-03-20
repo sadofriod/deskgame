@@ -271,6 +271,21 @@ describe("Express HTTP gateway", () => {
     expect(response.body).toContain("setInterval");
   });
 
+  it("serves the public landing page", async () => {
+    const response = await makeRequest(server, "GET", "/");
+    expect(response.status).toBe(200);
+    expect(typeof response.body).toBe("string");
+    expect(response.body).toContain("DeskGame 已部署");
+    expect(response.body).toContain("/admin/");
+  });
+
+  it("serves public index.html directly", async () => {
+    const response = await makeRequest(server, "GET", "/index.html");
+    expect(response.status).toBe(200);
+    expect(typeof response.body).toBe("string");
+    expect(response.body).toContain("DeskGame 服务入口");
+  });
+
   it("rejects unauthenticated admin requests", async () => {
     const apiResponse = await makeRequest(server, "GET", "/api/admin/overview");
     expect(apiResponse.status).toBe(401);
