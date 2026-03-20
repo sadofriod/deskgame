@@ -11,7 +11,7 @@
     "prebuild": "node scripts/copy-admin-vendor.mjs && prisma generate",
     "build": "tsc",
     "start": "node dist/server/index.js",
-    "vercel-build": "prisma generate && prisma db push && npm run build",
+    "vercel-build": "prisma generate && prisma migrate deploy && npm run build",
     "vercel-start": "npm start",
     "dev": "ts-node src/server/index.ts",
     "test": "jest"
@@ -19,6 +19,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sadofriod/deskgame.git"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "keywords": [],
   "author": "",

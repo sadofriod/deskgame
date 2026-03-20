@@ -312,6 +312,16 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   const app = express();
   const roomRepository = createRoomRepository(rooms);
   app.use(express.json());
+  const publicPageRateLimit = rateLimit({
+    windowMs: 60_000,
+    limit: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: resolveAdminAuthKey,
+    handler: (_req: Request, res: Response) => {
+      res.status(429).json({ error: "Too many landing page requests" });
+    },
+  });
   const adminAuthRateLimit = rateLimit({
     windowMs: 60_000,
     limit: 5,
@@ -338,11 +348,11 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
 
   const publicIndexPath = resolveRepoPath("public", "index.html");
 
-  app.get("/", (_req: Request, res: Response) => {
+  app.get("/", publicPageRateLimit, (_req: Request, res: Response) => {
     res.sendFile(publicIndexPath);
   });
 
-  app.get("/index.html", (_req: Request, res: Response) => {
+  app.get("/index.html", publicPageRateLimit, (_req: Request, res: Response) => {
     res.sendFile(publicIndexPath);
   });
 

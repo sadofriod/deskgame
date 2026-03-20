@@ -87,7 +87,7 @@ npm run vercel-start
 
 其中：
 
-- `vercel-build` 会执行 `prisma generate`、`prisma db push` 和 TypeScript 构建
+- `vercel-build` 会执行 `prisma generate`、`prisma migrate deploy` 和 TypeScript 构建
 - `vercel-start` 保持与当前生产启动命令一致
 
 ### 需要上传到 Vercel 的环境变量
