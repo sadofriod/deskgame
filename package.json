@@ -14,6 +14,7 @@
     "vercel-build": "prisma generate && prisma migrate deploy && npm run build",
     "vercel-start": "npm start",
     "dev": "ts-node src/server/index.ts",
+    "dev:local": "dotenv -e .env -- ts-node src/server/index.ts",
     "test": "jest"
   },
   "repository": {
@@ -35,6 +36,7 @@
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^25.5.0",
+    "dotenv-cli": "^11.0.0",
     "jest": "^30.3.0",
     "prisma": "6.19.2",
     "socket.io-client": "^4.8.1",

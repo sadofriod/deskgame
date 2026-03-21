@@ -3,12 +3,7 @@
   "buildCommand": "npm run vercel-build",
   "functions": {
     "api/index.js": {
-      "runtime": "nodejs20.x",
-      "includeFiles": [
-        "dist/**",
-        "public/**",
-        "docs/**"
-      ]
+      "includeFiles": "{dist/**,public/**,docs/**}"
     }
   },
   "rewrites": [

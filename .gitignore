@@ -3,3 +3,7 @@ dist/
 *.js.map
 coverage/
 public/admin/vendor/
+.vercel
+.env
+.env.*
+!.env.example
