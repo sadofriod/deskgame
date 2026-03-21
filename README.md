@@ -68,6 +68,51 @@ pnpm start
 pnpm test
 ```
 
+## Vercel 部署
+
+仓库已经补齐 Vercel 所需的最小配置：
+
+- `public/index.html`：作为公开可访问的根入口页
+- `api/index.js`：将现有 Express 应用暴露给 Vercel Node Runtime
+- `vercel.json`：把 `/rooms`、`/api/*`、`/admin/*` 重写到同一个服务入口
+- `prisma/schema.prisma` 中的 `PersistedRoom`：用于通过 Prisma 把房间快照落到 Vercel Postgres
+- `.env.example`：整理了需要同步到 Vercel 的环境变量
+
+### 推荐的 Vercel 构建 / 启动命令
+
+```bash
+npm run vercel-build
+npm run vercel-start
+```
+
+其中：
+
+- `vercel-build` 会执行 `prisma generate`、`prisma migrate deploy` 和 TypeScript 构建
+- `vercel-start` 保持与当前生产启动命令一致
+
+### 需要上传到 Vercel 的环境变量
+
+至少配置以下变量：
+
+```bash
+DATABASE_URL=postgres://USER:PASSWORD@HOST:5432/deskgame?sslmode=require
+ADMIN_AUTH_USERNAME=desk-admin
+ADMIN_AUTH_PASSWORD=replace-with-a-strong-password
+```
+
+可选变量：
+
+```bash
+PORT=3000
+ADMIN_ID=admin-1
+ADMIN_NAME=运营管理员
+ADMIN_EMAIL=ops@example.com
+ADMIN_AVATAR=https://example.com/avatar.png
+ADMIN_USERS='[{"id":"ops-1","name":"运营管理员","email":"ops@example.com","avatar":"https://example.com/avatar.png"}]'
+```
+
+> 说明：Vercel 运行时本身不提供 PM2 这样的常驻进程管理能力，因此线上重启由 Vercel 平台负责；仓库内提供的是 Vercel 可直接使用的构建、路由和 Prisma 存储接入配置。
+
 ## 管理后台
 
 启动服务后，可通过 `http://localhost:3000/admin` 打开后台单页应用。

@@ -114,6 +114,11 @@ export interface RoomSnapshot {
   winnerResult: WinnerResult | null;
 }
 
+export interface RoomPersistenceState {
+  snapshot: RoomSnapshot;
+  processedRequests: string[];
+}
+
 function buildInitialRound(round: number): Round {
   return {
     round,
@@ -233,6 +238,12 @@ export class Room {
     return room;
   }
 
+  static restorePersistenceState(state: RoomPersistenceState): Room {
+    const room = Room.restore(state.snapshot);
+    room.processedRequests = new Set(state.processedRequests);
+    return room;
+  }
+
   get id(): string {
     return this.roomId;
   }
@@ -260,6 +271,13 @@ export class Room {
       players: [...this.players.values()].map((player) => player.toState()),
       rounds: this.rounds.map(cloneRound),
       winnerResult: this.winnerResult,
+    };
+  }
+
+  toPersistenceState(): RoomPersistenceState {
+    return {
+      snapshot: this.snapshot(),
+      processedRequests: [...this.processedRequests],
     };
   }
 

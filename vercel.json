@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "buildCommand": "npm run vercel-build",
+  "functions": {
+    "api/index.js": {
+      "runtime": "nodejs20.x",
+      "includeFiles": [
+        "dist/**",
+        "public/**",
+        "docs/**"
+      ]
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/admin",
+      "destination": "/api"
+    },
+    {
+      "source": "/admin/:path*",
+      "destination": "/api"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "/api"
+    },
+    {
+      "source": "/rooms",
+      "destination": "/api"
+    },
+    {
+      "source": "/rooms/:path*",
+      "destination": "/api"
+    }
+  ]
+}
