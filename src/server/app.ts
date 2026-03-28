@@ -571,12 +571,12 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   });
 
   // ── POST /users ──────────────────────────────
-  // Body: { openId, nickName, unionId?, avatarUrl?, gender?, city?, province?, country?, language? }
+  // Body: { openId, nickname, unionId?, avatarUrl?, gender?, city?, province?, country?, language? }
   app.post("/users", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const {
         openId,
-        nickName,
+        nickname,
         unionId,
         avatarUrl,
         gender,
@@ -586,7 +586,7 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
         language,
       } = req.body as {
         openId?: unknown;
-        nickName?: unknown;
+        nickname?: unknown;
         unionId?: unknown;
         avatarUrl?: unknown;
         gender?: unknown;
@@ -599,13 +599,13 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
       if (typeof openId !== "string" || !openId.trim()) {
         throw Object.assign(new Error("openId is required"), { status: 400 });
       }
-      if (typeof nickName !== "string" || !nickName.trim()) {
-        throw Object.assign(new Error("nickName is required"), { status: 400 });
+      if (typeof nickname !== "string" || !nickname.trim()) {
+        throw Object.assign(new Error("nickname is required"), { status: 400 });
       }
 
       const user = await userRepository.upsert({
         openId: openId.trim(),
-        nickName: nickName.trim(),
+        nickname: nickname.trim(),
         unionId: typeof unionId === "string" ? unionId : null,
         avatarUrl: typeof avatarUrl === "string" ? avatarUrl : null,
         gender: typeof gender === "number" ? gender : null,
@@ -637,12 +637,12 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   });
 
   // ── PUT /users/:openId ───────────────────────
-  // Body: { nickName?, unionId?, avatarUrl?, gender?, city?, province?, country?, language? }
+  // Body: { nickname?, unionId?, avatarUrl?, gender?, city?, province?, country?, language? }
   app.put("/users/:openId", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const openId = String(req.params["openId"]);
       const {
-        nickName,
+        nickname,
         unionId,
         avatarUrl,
         gender,
@@ -651,7 +651,7 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
         country,
         language,
       } = req.body as {
-        nickName?: unknown;
+        nickname?: unknown;
         unionId?: unknown;
         avatarUrl?: unknown;
         gender?: unknown;
@@ -662,7 +662,7 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
       };
 
       const updateData: Record<string, unknown> = {};
-      if (typeof nickName === "string" && nickName.trim()) updateData["nickName"] = nickName.trim();
+      if (typeof nickname === "string" && nickname.trim()) updateData["nickname"] = nickname.trim();
       if ("unionId" in req.body) updateData["unionId"] = typeof unionId === "string" ? unionId : null;
       if ("avatarUrl" in req.body) updateData["avatarUrl"] = typeof avatarUrl === "string" ? avatarUrl : null;
       if ("gender" in req.body) updateData["gender"] = typeof gender === "number" ? gender : null;

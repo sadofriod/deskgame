@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "User" (
+CREATE TABLE "wechat_users" (
     "openId" VARCHAR(64) NOT NULL,
     "unionId" VARCHAR(64),
     "nickName" VARCHAR(64) NOT NULL,
@@ -12,8 +12,8 @@ CREATE TABLE "User" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
-    CONSTRAINT "User_pkey" PRIMARY KEY ("openId")
+    CONSTRAINT "wechat_users_pkey" PRIMARY KEY ("openId")
 );
 
 -- CreateIndex
-CREATE INDEX "User_unionId_idx" ON "User"("unionId");
+CREATE INDEX "wechat_users_unionId_idx" ON "wechat_users"("unionId");

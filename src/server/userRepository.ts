@@ -3,7 +3,7 @@ import { PrismaClient } from "@prisma/client";
 export interface UserRecord {
   openId: string;
   unionId?: string | null;
-  nickName: string;
+  nickname: string;
   avatarUrl?: string | null;
   gender?: number | null;
   city?: string | null;
@@ -17,7 +17,7 @@ export interface UserRecord {
 export interface UpsertUserInput {
   openId: string;
   unionId?: string | null;
-  nickName: string;
+  nickname: string;
   avatarUrl?: string | null;
   gender?: number | null;
   city?: string | null;
@@ -28,7 +28,7 @@ export interface UpsertUserInput {
 
 export interface UpdateUserInput {
   unionId?: string | null;
-  nickName?: string;
+  nickname?: string;
   avatarUrl?: string | null;
   gender?: number | null;
   city?: string | null;
@@ -47,11 +47,11 @@ class PrismaUserRepository implements UserRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
   async upsert(data: UpsertUserInput): Promise<UserRecord> {
-    const { openId, nickName, ...optionalFields } = data;
+    const { openId, nickname, ...optionalFields } = data;
     return this.prisma.user.upsert({
       where: { openId },
-      create: { openId, nickName, ...optionalFields },
-      update: { nickName, ...optionalFields },
+      create: { openId, nickname, ...optionalFields },
+      update: { nickname, ...optionalFields },
     });
   }
 
