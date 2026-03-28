@@ -9,6 +9,7 @@ import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { Room, RoomSnapshot } from "../domain/aggregates/Room";
 import { ActionCard, GameState, Role, RoleConfig, RoomConfig } from "../domain/types";
 import { createRoomRepository, RoomRepository, RoomStore } from "./roomRepository";
+import { createUserRepository, UserRepository } from "./userRepository";
 import { uuidv4 } from "../utils/uuid";
 
 export type { RoomStore } from "./roomRepository";
@@ -328,6 +329,7 @@ async function buildAdminOverview(roomRepository: RoomRepository) {
 export function createApp(rooms: RoomStore = new Map()): express.Application {
   const app = express();
   const roomRepository = createRoomRepository(rooms);
+  const userRepository = createUserRepository();
   app.use(express.json());
   const publicPageRateLimit = rateLimit({
     windowMs: 60_000,
@@ -563,6 +565,118 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
         return;
       }
       res.status(200).json({ room: room.snapshot() });
+    } catch (err) {
+      asDomainError(err); next(err);
+    }
+  });
+
+  // ── POST /users ──────────────────────────────
+  // Body: { openId, nickname, unionId?, avatarUrl?, gender?, city?, province?, country?, language? }
+  app.post("/users", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const {
+        openId,
+        nickname,
+        unionId,
+        avatarUrl,
+        gender,
+        city,
+        province,
+        country,
+        language,
+      } = req.body as {
+        openId?: unknown;
+        nickname?: unknown;
+        unionId?: unknown;
+        avatarUrl?: unknown;
+        gender?: unknown;
+        city?: unknown;
+        province?: unknown;
+        country?: unknown;
+        language?: unknown;
+      };
+
+      if (typeof openId !== "string" || !openId.trim()) {
+        throw Object.assign(new Error("openId is required"), { status: 400 });
+      }
+      if (typeof nickname !== "string" || !nickname.trim()) {
+        throw Object.assign(new Error("nickname is required"), { status: 400 });
+      }
+
+      const user = await userRepository.upsert({
+        openId: openId.trim(),
+        nickname: nickname.trim(),
+        unionId: typeof unionId === "string" ? unionId : null,
+        avatarUrl: typeof avatarUrl === "string" ? avatarUrl : null,
+        gender: typeof gender === "number" ? gender : null,
+        city: typeof city === "string" ? city : null,
+        province: typeof province === "string" ? province : null,
+        country: typeof country === "string" ? country : null,
+        language: typeof language === "string" ? language : null,
+      });
+
+      res.status(200).json({ user });
+    } catch (err) {
+      asDomainError(err); next(err);
+    }
+  });
+
+  // ── GET /users/:openId ───────────────────────
+  app.get("/users/:openId", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const openId = String(req.params["openId"]);
+      const user = await userRepository.get(openId);
+      if (!user) {
+        res.status(404).json({ error: `User ${openId} not found` });
+        return;
+      }
+      res.status(200).json({ user });
+    } catch (err) {
+      asDomainError(err); next(err);
+    }
+  });
+
+  // ── PUT /users/:openId ───────────────────────
+  // Body: { nickname?, unionId?, avatarUrl?, gender?, city?, province?, country?, language? }
+  app.put("/users/:openId", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const openId = String(req.params["openId"]);
+      const {
+        nickname,
+        unionId,
+        avatarUrl,
+        gender,
+        city,
+        province,
+        country,
+        language,
+      } = req.body as {
+        nickname?: unknown;
+        unionId?: unknown;
+        avatarUrl?: unknown;
+        gender?: unknown;
+        city?: unknown;
+        province?: unknown;
+        country?: unknown;
+        language?: unknown;
+      };
+
+      const updateData: Record<string, unknown> = {};
+      if (typeof nickname === "string" && nickname.trim()) updateData["nickname"] = nickname.trim();
+      if ("unionId" in req.body) updateData["unionId"] = typeof unionId === "string" ? unionId : null;
+      if ("avatarUrl" in req.body) updateData["avatarUrl"] = typeof avatarUrl === "string" ? avatarUrl : null;
+      if ("gender" in req.body) updateData["gender"] = typeof gender === "number" ? gender : null;
+      if ("city" in req.body) updateData["city"] = typeof city === "string" ? city : null;
+      if ("province" in req.body) updateData["province"] = typeof province === "string" ? province : null;
+      if ("country" in req.body) updateData["country"] = typeof country === "string" ? country : null;
+      if ("language" in req.body) updateData["language"] = typeof language === "string" ? language : null;
+
+      const user = await userRepository.update(openId, updateData);
+      if (!user) {
+        res.status(404).json({ error: `User ${openId} not found` });
+        return;
+      }
+      res.status(200).json({ user });
     } catch (err) {
       asDomainError(err); next(err);
     }

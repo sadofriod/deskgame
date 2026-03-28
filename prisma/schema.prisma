@@ -123,3 +123,20 @@ model PersistedRoom {
   @@index([roomCode])
   @@index([ownerOpenId])
 }
+
+model User {
+  openId    String   @id @db.VarChar(64)
+  unionId   String?  @db.VarChar(64)
+  nickname  String   @map("nickName") @db.VarChar(64)
+  avatarUrl String?  @db.VarChar(256)
+  gender    Int?
+  city      String?  @db.VarChar(64)
+  province  String?  @db.VarChar(64)
+  country   String?  @db.VarChar(64)
+  language  String?  @db.VarChar(32)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("wechat_users")
+  @@index([unionId])
+}

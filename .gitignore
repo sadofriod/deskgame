@@ -7,3 +7,4 @@ public/admin/vendor/
 .env
 .env.*
 !.env.example
+package-lock.json
