@@ -337,4 +337,99 @@ describe("Express HTTP gateway", () => {
     });
     expect(rateLimitedResponse.status).toBe(429);
   });
+
+  // ── User API ─────────────────────────────────
+
+  it("upserts a user via POST /users", async () => {
+    const response = await makeRequest(server, "POST", "/users", {
+      openId: "wx-open-001",
+      nickName: "Alice",
+      avatarUrl: "https://example.com/avatar.png",
+      gender: 1,
+      city: "Shanghai",
+      province: "Shanghai",
+      country: "CN",
+      language: "zh_CN",
+    });
+    expect(response.status).toBe(200);
+    const user = (response.body as { user: Record<string, unknown> }).user;
+    expect(user["openId"]).toBe("wx-open-001");
+    expect(user["nickName"]).toBe("Alice");
+    expect(user["avatarUrl"]).toBe("https://example.com/avatar.png");
+    expect(user["gender"]).toBe(1);
+    expect(user["city"]).toBe("Shanghai");
+  });
+
+  it("returns 400 when openId is missing on POST /users", async () => {
+    const response = await makeRequest(server, "POST", "/users", {
+      nickName: "Alice",
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("returns 400 when nickName is missing on POST /users", async () => {
+    const response = await makeRequest(server, "POST", "/users", {
+      openId: "wx-open-002",
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("retrieves a user via GET /users/:openId", async () => {
+    await makeRequest(server, "POST", "/users", {
+      openId: "wx-open-003",
+      nickName: "Bob",
+    });
+
+    const response = await makeRequest(server, "GET", "/users/wx-open-003");
+    expect(response.status).toBe(200);
+    const user = (response.body as { user: Record<string, unknown> }).user;
+    expect(user["openId"]).toBe("wx-open-003");
+    expect(user["nickName"]).toBe("Bob");
+  });
+
+  it("returns 404 for unknown user on GET /users/:openId", async () => {
+    const response = await makeRequest(server, "GET", "/users/no-such-user");
+    expect(response.status).toBe(404);
+  });
+
+  it("updates a user via PUT /users/:openId", async () => {
+    await makeRequest(server, "POST", "/users", {
+      openId: "wx-open-004",
+      nickName: "Carol",
+      city: "Beijing",
+    });
+
+    const response = await makeRequest(server, "PUT", "/users/wx-open-004", {
+      nickName: "Caroline",
+      city: "Shenzhen",
+    });
+    expect(response.status).toBe(200);
+    const user = (response.body as { user: Record<string, unknown> }).user;
+    expect(user["nickName"]).toBe("Caroline");
+    expect(user["city"]).toBe("Shenzhen");
+  });
+
+  it("returns 404 when updating a non-existent user via PUT /users/:openId", async () => {
+    const response = await makeRequest(server, "PUT", "/users/no-such-user", {
+      nickName: "Ghost",
+    });
+    expect(response.status).toBe(404);
+  });
+
+  it("upsert overwrites nickName on second call for same openId", async () => {
+    await makeRequest(server, "POST", "/users", {
+      openId: "wx-open-005",
+      nickName: "Dave",
+    });
+
+    const second = await makeRequest(server, "POST", "/users", {
+      openId: "wx-open-005",
+      nickName: "David",
+      city: "Guangzhou",
+    });
+    expect(second.status).toBe(200);
+    const user = (second.body as { user: Record<string, unknown> }).user;
+    expect(user["nickName"]).toBe("David");
+    expect(user["city"]).toBe("Guangzhou");
+  });
 });
