@@ -16,7 +16,7 @@ DeskGame Backend 是一个基于 TypeScript、Express 和 Socket.IO 的多人桌
 
 当前实现对齐文档中的新流程：
 
-`preparation -> bet -> environment -> action -> damage -> talk -> vote -> settlement`
+`preparation -> bet -> environment -> action -> damage -> talk -> vote -> [tieBreak] -> settlement`
 
 平票分支：
 
