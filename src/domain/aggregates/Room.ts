@@ -1,16 +1,15 @@
 import { uuidv4 } from "../../utils/uuid";
-import { Player, PlayerState } from "../entities/Player";
+import { MatchPlayer } from "../entities/Player";
 import {
-  BetSubmitted,
+  ActionSubmitted,
+  CardsDealt,
   DomainEvent,
   EnvironmentRevealed,
-  PlayerEliminated,
   PlayerJoinedRoom,
-  PlayerReadyStateChanged,
   PlayerRemovedFromRoom,
+  RoleSelected,
   RoleSelectionCompleted,
   RoleSelectionStarted,
-  RoomConfigUpdated,
   RoomCreated,
   RoundSettled,
   StageAdvanced,
@@ -24,21 +23,27 @@ import { SettlementService } from "../services/SettlementService";
 import { StageFlowService } from "../services/StageFlowService";
 import { WinnerJudgementService } from "../services/WinnerJudgementService";
 import {
-  ActionCard,
-  EnvironmentCard,
+  ActionSubmission,
+  Camp,
+  DeckEntry,
   GameState,
-  Role,
-  RoomConfig,
-  Round,
+  HandCard,
+  MatchPlayerState,
+  MatchState,
+  RoomPlayerState,
+  RoundState,
   Stage,
   VoteResult,
   WinnerResult,
 } from "../types";
 
+// ── Commands ──────────────────────────────────────────────────────────────────
+
 export interface CreateRoomCommand {
   requestId: string;
   ownerOpenId: string;
-  roomConfig: RoomConfig;
+  ruleSetCode: string;
+  deckTemplateCode: string;
 }
 
 export interface JoinRoomCommand {
@@ -55,63 +60,63 @@ export interface LeaveRoomCommand {
   openId: string;
 }
 
-export interface UpdateRoomConfigCommand {
+export interface StartGameCommand {
   requestId: string;
   roomId: string;
   openId: string;
-  roomConfig: RoomConfig;
-}
-
-export interface SetReadyCommand {
-  requestId: string;
-  roomId: string;
-  openId: string;
-  ready: boolean;
+  seed: string;
 }
 
 export interface ConfirmRoleSelectionCommand {
   requestId: string;
   roomId: string;
   openId: string;
-  roleId: Role;
+  roleCode: string;
 }
 
-export interface SubmitBetCommand {
+export interface SubmitActionCommand {
   requestId: string;
   roomId: string;
   openId: string;
-  selectedAction?: ActionCard;
-  passedBet?: boolean;
+  cardInstanceId: string;
+}
+
+export interface RevealEnvironmentCommand {
+  requestId: string;
+  roomId: string;
 }
 
 export interface SubmitVoteCommand {
   requestId: string;
   roomId: string;
   openId: string;
-  voteTarget: string;
+  voteRound: number;
+  voteTarget: string | null;
+  votePowerAtSubmit: number;
 }
 
 export interface AdvanceStageCommand {
   requestId: string;
   roomId: string;
   openId?: string;
-  timeoutFlag?: boolean;
+  trigger?: "ownerCommand" | "timeout";
 }
+
+// ── Snapshot ──────────────────────────────────────────────────────────────────
 
 export interface RoomSnapshot {
   roomId: string;
-  roomCode: string;
   ownerOpenId: string;
+  ruleSetCode: string;
+  deckTemplateCode: string;
   gameState: GameState;
   playerCount: number;
-  roomConfig: RoomConfig;
-  currentRound: number;
+  currentFloor: number;
   currentStage: Stage;
-  envDeck: EnvironmentCard[];
+  currentMatchId: string | null;
   version: number;
-  players: PlayerState[];
-  rounds: Round[];
-  winnerResult: WinnerResult | null;
+  roomPlayers: RoomPlayerState[];
+  match: MatchState | null;
 }
 
 export interface RoomPersistenceState {
@@ -119,158 +124,153 @@ export interface RoomPersistenceState {
   processedRequests: string[];
 }
 
-function buildInitialRound(round: number): Round {
-  return {
-    round,
-    environmentCard: null,
-    betSubmissions: [],
-    actionLogs: [],
-    voteSubmissions: [],
-    voteResult: null,
-    settlementResult: null,
-    revoteCount: 0,
-  };
-}
-
-function cloneRound(round: Round): Round {
-  return {
-    ...round,
-    betSubmissions: round.betSubmissions.map((item) => ({ ...item })),
-    actionLogs: round.actionLogs.map((item) => ({ ...item, targetOpenIds: [...item.targetOpenIds] })),
-    voteSubmissions: round.voteSubmissions.map((item) => ({ ...item })),
-    voteResult: round.voteResult ? { ...round.voteResult, tieTargets: [...round.voteResult.tieTargets] } : null,
-    settlementResult: round.settlementResult
-      ? {
-          damages: round.settlementResult.damages.map((item) => ({ ...item })),
-          heals: round.settlementResult.heals.map((item) => ({ ...item })),
-          eliminated: [...round.settlementResult.eliminated],
-        }
-      : null,
-  };
-}
-
-function generateRoomCode(): string {
-  return uuidv4().replace(/\D/g, "").slice(0, 6).padEnd(6, "0");
-}
+// ── Room aggregate ────────────────────────────────────────────────────────────
 
 export class Room {
   private roomId: string;
-  private roomCode: string;
   private ownerOpenId: string;
+  private ruleSetCode: string;
+  private deckTemplateCode: string;
   private gameState: GameState;
   private playerCount: number;
-  private roomConfig: RoomConfig;
-  private currentRoundNumber: number;
+  private currentFloor: number;
   private currentStage: Stage;
-  private envDeck: EnvironmentCard[];
+  private currentMatchId: string | null;
   private version: number;
-  private players: Map<string, Player>;
-  private rounds: Round[];
+  private roomPlayers: RoomPlayerState[];
+  private matchPlayers: Map<string, MatchPlayer>; // openId → MatchPlayer
+  private deck: DeckEntry[];
+  private rounds: RoundState[];
   private winnerResult: WinnerResult | null;
   private processedRequests: Set<string>;
+  private readonly _events: DomainEvent[] = [];
+
   private readonly dealService = new DealService();
   private readonly envDeckService = new EnvironmentDeckService();
   private readonly stageFlowService = new StageFlowService();
   private readonly settlementService = new SettlementService();
   private readonly winnerJudgementService = new WinnerJudgementService();
-  private readonly _events: DomainEvent[] = [];
 
   private constructor(roomId: string) {
     this.roomId = roomId;
-    this.roomCode = "";
     this.ownerOpenId = "";
+    this.ruleSetCode = "";
+    this.deckTemplateCode = "";
     this.gameState = GameState.wait;
     this.playerCount = 0;
-    this.roomConfig = { playerCount: 5, roleConfig: "independent" };
-    this.currentRoundNumber = 0;
-    this.currentStage = Stage.lobby;
-    this.envDeck = [];
+    this.currentFloor = 1;
+    this.currentStage = Stage.preparation;
+    this.currentMatchId = null;
     this.version = 0;
-    this.players = new Map();
+    this.roomPlayers = [];
+    this.matchPlayers = new Map();
+    this.deck = [];
     this.rounds = [];
     this.winnerResult = null;
     this.processedRequests = new Set();
-  }
-
-  static create(cmd: CreateRoomCommand): Room {
-    if (!cmd.requestId) throw new Error("requestId is required");
-    if (!cmd.ownerOpenId) throw new Error("ownerOpenId is required");
-    Room.validateRoomConfig(cmd.roomConfig);
-
-    const room = new Room(uuidv4());
-    room.roomCode = generateRoomCode();
-    room.ownerOpenId = cmd.ownerOpenId;
-    room.roomConfig = { ...cmd.roomConfig };
-    room.version = 1;
-    room.processedRequests.add(cmd.requestId);
-    room.addPlayer({ openId: cmd.ownerOpenId, nickname: "", avatar: "" });
-
-    const event: RoomCreated = {
-      name: "RoomCreated",
-      roomId: room.roomId,
-      roomCode: room.roomCode,
-      ownerOpenId: room.ownerOpenId,
-      gameState: room.gameState,
-      currentRound: room.currentRoundNumber,
-      currentStage: room.currentStage,
-      version: room.version,
-    };
-    room._events.push(event);
-    return room;
-  }
-
-  static restore(snapshot: RoomSnapshot): Room {
-    const room = new Room(snapshot.roomId);
-    room.roomCode = snapshot.roomCode;
-    room.ownerOpenId = snapshot.ownerOpenId;
-    room.gameState = snapshot.gameState;
-    room.playerCount = snapshot.playerCount;
-    room.roomConfig = { ...snapshot.roomConfig };
-    room.currentRoundNumber = snapshot.currentRound;
-    room.currentStage = snapshot.currentStage;
-    room.envDeck = [...snapshot.envDeck];
-    room.version = snapshot.version;
-    room.rounds = snapshot.rounds.map(cloneRound);
-    room.winnerResult = snapshot.winnerResult;
-    for (const playerState of snapshot.players) {
-      room.players.set(playerState.openId, Player.restore(playerState));
-    }
-    return room;
-  }
-
-  static restorePersistenceState(state: RoomPersistenceState): Room {
-    const room = Room.restore(state.snapshot);
-    room.processedRequests = new Set(state.processedRequests);
-    return room;
   }
 
   get id(): string {
     return this.roomId;
   }
 
-  get events(): DomainEvent[] {
-    return [...this._events];
+  get events(): readonly DomainEvent[] {
+    return this._events;
   }
 
   clearEvents(): void {
     this._events.length = 0;
   }
 
+  // ── Factory ─────────────────────────────────────────────────────────────────
+
+  static create(cmd: CreateRoomCommand): Room {
+    if (!cmd.requestId) throw new Error("requestId is required");
+    if (!cmd.ownerOpenId) throw new Error("ownerOpenId is required");
+    if (!cmd.ruleSetCode) throw new Error("ruleSetCode is required");
+    if (!cmd.deckTemplateCode) throw new Error("deckTemplateCode is required");
+
+    const room = new Room(uuidv4());
+    room.processedRequests.add(cmd.requestId);
+    room.ownerOpenId = cmd.ownerOpenId;
+    room.ruleSetCode = cmd.ruleSetCode;
+    room.deckTemplateCode = cmd.deckTemplateCode;
+    room.gameState = GameState.wait;
+    room.currentFloor = 1;
+    room.currentStage = Stage.preparation;
+    room.playerCount = 1;
+    room.version = 1;
+    room.roomPlayers = [
+      { openId: cmd.ownerOpenId, seatNo: 1, nickname: cmd.ownerOpenId, avatar: "", isReady: false },
+    ];
+
+    room._events.push({
+      name: "RoomCreated",
+      roomId: room.roomId,
+      version: room.version,
+      ownerOpenId: room.ownerOpenId,
+      gameState: room.gameState,
+      currentFloor: room.currentFloor,
+      currentStage: room.currentStage,
+    } as RoomCreated);
+
+    return room;
+  }
+
+  static restore(state: RoomPersistenceState): Room {
+    const snap = state.snapshot;
+    const room = new Room(snap.roomId);
+    room.ownerOpenId = snap.ownerOpenId;
+    room.ruleSetCode = snap.ruleSetCode;
+    room.deckTemplateCode = snap.deckTemplateCode;
+    room.gameState = snap.gameState;
+    room.playerCount = snap.playerCount;
+    room.currentFloor = snap.currentFloor;
+    room.currentStage = snap.currentStage;
+    room.currentMatchId = snap.currentMatchId;
+    room.version = snap.version;
+    room.roomPlayers = snap.roomPlayers;
+
+    if (snap.match) {
+      for (const ps of snap.match.players) {
+        room.matchPlayers.set(ps.openId, new MatchPlayer(ps));
+      }
+      room.deck = snap.match.deck;
+      room.rounds = snap.match.rounds;
+      room.winnerResult = snap.match.winnerResult;
+    }
+
+    room.processedRequests = new Set(state.processedRequests);
+    return room;
+  }
+
+  // ── Snapshot ─────────────────────────────────────────────────────────────────
+
   snapshot(): RoomSnapshot {
+    const match: MatchState | null =
+      this.currentMatchId
+        ? {
+            matchId: this.currentMatchId,
+            players: [...this.matchPlayers.values()].map((p) => p.toState()),
+            deck: this.deck,
+            rounds: this.rounds.map((r) => ({ ...r, actionSubmissions: [...r.actionSubmissions], voteSubmissions: [...r.voteSubmissions] })),
+            winnerResult: this.winnerResult,
+          }
+        : null;
+
     return {
       roomId: this.roomId,
-      roomCode: this.roomCode,
       ownerOpenId: this.ownerOpenId,
+      ruleSetCode: this.ruleSetCode,
+      deckTemplateCode: this.deckTemplateCode,
       gameState: this.gameState,
       playerCount: this.playerCount,
-      roomConfig: { ...this.roomConfig },
-      currentRound: this.currentRoundNumber,
+      currentFloor: this.currentFloor,
       currentStage: this.currentStage,
-      envDeck: [...this.envDeck],
+      currentMatchId: this.currentMatchId,
       version: this.version,
-      players: [...this.players.values()].map((player) => player.toState()),
-      rounds: this.rounds.map(cloneRound),
-      winnerResult: this.winnerResult,
+      roomPlayers: [...this.roomPlayers],
+      match,
     };
   }
 
@@ -281,557 +281,516 @@ export class Room {
     };
   }
 
+  // ── Commands ──────────────────────────────────────────────────────────────────
+
   joinRoom(cmd: JoinRoomCommand): void {
-    this.assertLobbyState();
-    if (this.players.has(cmd.openId)) {
-      throw new Error(`Player ${cmd.openId} is already in the room`);
-    }
-    if (this.playerCount >= 10) {
-      throw new Error("Cannot join: room is full (max 10 players)");
-    }
+    if (this.processedRequests.has(cmd.requestId)) return;
+    if (this.gameState !== GameState.wait) throw new Error("Room is not in wait state");
+    if (this.playerCount >= 10) throw new Error("Room is full (max 10 players)");
+    if (this.roomPlayers.some((p) => p.openId === cmd.openId))
+      throw new Error(`Player ${cmd.openId} already in room`);
 
-    const seatNo = this.addPlayer({
-      openId: cmd.openId,
-      nickname: cmd.nickname,
-      avatar: cmd.avatar,
-    });
+    const seatNo = this.playerCount + 1;
+    this.roomPlayers.push({ openId: cmd.openId, seatNo, nickname: cmd.nickname, avatar: cmd.avatar, isReady: false });
+    this.playerCount++;
     this.version++;
+    this.processedRequests.add(cmd.requestId);
 
-    const event: PlayerJoinedRoom = {
+    this._events.push({
       name: "PlayerJoinedRoom",
       roomId: this.roomId,
+      version: this.version,
       openId: cmd.openId,
       seatNo,
       playerCount: this.playerCount,
-      version: this.version,
-    };
-    this._events.push(event);
+    } as PlayerJoinedRoom);
   }
 
   leaveRoom(cmd: LeaveRoomCommand): void {
-    if (cmd.openId === this.ownerOpenId) {
-      throw new Error("Owner cannot leave room directly");
-    }
-    const deleted = this.players.delete(cmd.openId);
-    if (!deleted) {
-      throw new Error(`Player ${cmd.openId} is not in the room`);
-    }
-    this.playerCount--;
-    if (this.currentStage === Stage.lobby) {
-      this.reseatPlayers();
-    }
-    this.version++;
+    if (this.processedRequests.has(cmd.requestId)) return;
+    const idx = this.roomPlayers.findIndex((p) => p.openId === cmd.openId);
+    if (idx < 0) throw new Error(`Player ${cmd.openId} not in room`);
 
-    const event: PlayerRemovedFromRoom = {
+    this.roomPlayers.splice(idx, 1);
+    // Re-assign seatNos
+    this.roomPlayers.forEach((p, i) => { p.seatNo = i + 1; });
+    this.playerCount--;
+    this.version++;
+    this.processedRequests.add(cmd.requestId);
+
+    this._events.push({
       name: "PlayerRemovedFromRoom",
       roomId: this.roomId,
+      version: this.version,
       openId: cmd.openId,
       playerCount: this.playerCount,
-      version: this.version,
-    };
-    this._events.push(event);
+    } as PlayerRemovedFromRoom);
   }
 
-  updateRoomConfig(cmd: UpdateRoomConfigCommand): void {
-    this.assertOwner(cmd.openId);
-    this.assertLobbyState();
-    Room.validateRoomConfig(cmd.roomConfig);
-    this.roomConfig = { ...cmd.roomConfig };
-    this.version++;
+  startGame(cmd: StartGameCommand): void {
+    if (this.processedRequests.has(cmd.requestId)) return;
+    if (cmd.openId !== this.ownerOpenId) throw new Error("Only owner can start game");
+    if (this.gameState !== GameState.wait) throw new Error("Game already started");
+    if (this.playerCount < 5) throw new Error("Need at least 5 players to start");
+    if (this.playerCount > 10) throw new Error("Cannot have more than 10 players");
 
-    const event: RoomConfigUpdated = {
-      name: "RoomConfigUpdated",
-      roomId: this.roomId,
-      roomConfig: { ...this.roomConfig },
-      version: this.version,
-    };
-    this._events.push(event);
-  }
+    const playerOpenIds = this.roomPlayers.map((p) => p.openId);
+    const assignments = this.dealService.deal({
+      players: playerOpenIds,
+      playerCount: this.playerCount,
+      seed: cmd.seed,
+    });
+    const deck = this.envDeckService.generate({
+      ruleSetCode: this.ruleSetCode,
+      deckTemplateCode: this.deckTemplateCode,
+      seed: cmd.seed,
+    });
 
-  setReady(cmd: SetReadyCommand): void {
-    this.assertLobbyState();
-    const player = this.requirePlayer(cmd.openId);
-    player.setReady(cmd.ready);
-    this.version++;
+    const matchId = uuidv4();
+    this.currentMatchId = matchId;
+    this.deck = deck;
+    this.matchPlayers = new Map();
 
-    const allReady = this.allPlayersReady();
-    const event: PlayerReadyStateChanged = {
-      name: "PlayerReadyStateChanged",
-      roomId: this.roomId,
-      openId: cmd.openId,
-      ready: cmd.ready,
-      allReady,
-      version: this.version,
-    };
-    this._events.push(event);
-
-    if (allReady) {
-      this.startRoleSelection();
+    for (const assignment of assignments) {
+      const roomPlayer = this.roomPlayers.find((p) => p.openId === assignment.openId);
+      const playerState: MatchPlayerState = {
+        openId: assignment.openId,
+        seatNo: roomPlayer?.seatNo ?? 1,
+        identityCode: assignment.identityCode,
+        chosenRoleCode: null,
+        maxHp: null,
+        currentHp: null,
+        isAlive: true,
+        canSpeak: true,
+        canVote: true,
+        voteModifier: 0,
+        roleOptions: assignment.roleOptions,
+        handCards: assignment.initialHandCards.map((c) => ({ ...c, consumed: false })),
+        status: {},
+      };
+      this.matchPlayers.set(assignment.openId, new MatchPlayer(playerState));
     }
+
+    // Create floor-1 Round shell
+    this.rounds = [];
+    this.rounds.push({
+      floor: 1,
+      environmentCardCode: null,
+      roundKind: null,
+      currentVoteRound: 1,
+      actionSubmissions: [],
+      voteSubmissions: [],
+      settlementResult: null,
+      voteResult: null,
+    });
+
+    this.gameState = GameState.start;
+    this.currentFloor = 1;
+    this.currentStage = Stage.preparation;
+    this.winnerResult = null;
+    this.version++;
+    this.processedRequests.add(cmd.requestId);
+
+    this._events.push({
+      name: "CardsDealt",
+      roomId: this.roomId,
+      version: this.version,
+      matchId,
+      currentFloor: this.currentFloor,
+      currentStage: this.currentStage,
+      players: assignments.map((a) => ({
+        openId: a.openId,
+        identityCode: a.identityCode,
+        roleOptions: a.roleOptions,
+        initialHandCards: a.initialHandCards,
+      })),
+    } as CardsDealt);
+
+    this._events.push({
+      name: "RoleSelectionStarted",
+      roomId: this.roomId,
+      version: this.version,
+      matchId,
+      pendingPlayers: playerOpenIds,
+    } as RoleSelectionStarted);
   }
 
   confirmRoleSelection(cmd: ConfirmRoleSelectionCommand): void {
-    if (this.currentStage !== Stage.roleSelection) {
-      throw new Error("Cannot confirm role selection outside roleSelection stage");
-    }
-    const player = this.requirePlayer(cmd.openId);
-    player.confirmRoleSelection(cmd.roleId);
+    if (this.processedRequests.has(cmd.requestId)) return;
+    if (this.currentStage !== Stage.preparation) throw new Error("Not in preparation stage");
 
-    if (!this.allRolesSelected()) {
-      return;
-    }
+    const player = this.matchPlayers.get(cmd.openId);
+    if (!player) throw new Error(`Player ${cmd.openId} not in match`);
+    if (player.state.chosenRoleCode !== null)
+      throw new Error(`Player ${cmd.openId} already confirmed role`);
+    if (!player.state.roleOptions.includes(cmd.roleCode))
+      throw new Error(`roleCode "${cmd.roleCode}" not in player's roleOptions`);
 
-    this.envDeck = this.envDeckService.generate(`${this.roomId}:env`);
-    this.gameState = GameState.playing;
-    this.currentRoundNumber = 1;
-    this.currentStage = Stage.bet;
-    this.rounds = [buildInitialRound(1)];
-    for (const currentPlayer of this.players.values()) {
-      currentPlayer.resetRoundState();
-    }
+    player.confirmRole(cmd.roleCode);
     this.version++;
-
-    const event: RoleSelectionCompleted = {
-      name: "RoleSelectionCompleted",
-      roomId: this.roomId,
-      currentRound: this.currentRoundNumber,
-      currentStage: Stage.bet,
-      envDeck: [...this.envDeck],
-      version: this.version,
-    };
-    this._events.push(event);
-  }
-
-  submitBet(cmd: SubmitBetCommand): void {
-    if (this.currentStage !== Stage.bet) {
-      throw new Error("Cannot submit bet: not in bet stage");
-    }
-    if (this.processedRequests.has(cmd.requestId)) {
-      return;
-    }
-
-    const player = this.requirePlayer(cmd.openId);
-    if (!player.isAlive) {
-      throw new Error(`Player ${cmd.openId} is not alive`);
-    }
-    player.submitBet({
-      selectedAction: cmd.selectedAction,
-      passedBet: cmd.passedBet,
-    });
     this.processedRequests.add(cmd.requestId);
 
-    const round = this.currentRound();
-    round.betSubmissions = round.betSubmissions.filter((item) => item.openId !== cmd.openId);
-    round.betSubmissions.push({
-      openId: cmd.openId,
-      selectedAction: player.selectedAction,
-      passedBet: player.passedBet,
-      submittedAt: new Date(),
-    });
-    this.version++;
-
-    const event: BetSubmitted = {
-      name: "BetSubmitted",
+    this._events.push({
+      name: "RoleSelected",
       roomId: this.roomId,
-      round: this.currentRoundNumber,
-      openId: cmd.openId,
-      passedBet: player.passedBet,
-      selectedAction: player.selectedAction,
       version: this.version,
+      openId: cmd.openId,
+      roleCode: cmd.roleCode,
+    } as RoleSelected);
+
+    // Check if all players confirmed
+    const allConfirmed = [...this.matchPlayers.values()].every((p) => p.state.chosenRoleCode !== null);
+    if (allConfirmed) {
+      this._events.push({
+        name: "RoleSelectionCompleted",
+        roomId: this.roomId,
+        version: this.version,
+        matchId: this.currentMatchId!,
+        currentFloor: this.currentFloor,
+        currentStage: this.currentStage,
+      } as RoleSelectionCompleted);
+    }
+  }
+
+  submitAction(cmd: SubmitActionCommand): void {
+    if (this.processedRequests.has(cmd.requestId)) return;
+    if (this.currentStage !== Stage.bet) throw new Error("Not in bet stage");
+
+    const player = this.matchPlayers.get(cmd.openId);
+    if (!player) throw new Error(`Player ${cmd.openId} not in match`);
+    if (!player.isAlive) throw new Error(`Player ${cmd.openId} is not alive`);
+
+    const card = player.state.handCards.find(
+      (c) => c.cardInstanceId === cmd.cardInstanceId && !c.consumed
+    );
+    if (!card) throw new Error(`Card ${cmd.cardInstanceId} not found or already consumed`);
+
+    const currentRound = this.getCurrentRound();
+    if (!currentRound) throw new Error("No current round found");
+
+    // Check if player already submitted in this round
+    const existing = currentRound.actionSubmissions.find((s) => s.openId === cmd.openId);
+    const sequence = existing ? existing.sequence + 1 : 1;
+
+    const submission: ActionSubmission = {
+      openId: cmd.openId,
+      cardInstanceId: cmd.cardInstanceId,
+      actionCardCode: card.actionCardCode,
+      sequence,
+      sourceStage: Stage.bet,
+      isLocked: true,
     };
-    this._events.push(event);
+    currentRound.actionSubmissions.push(submission);
+    player.consumeCard(cmd.cardInstanceId);
+    this.version++;
+    this.processedRequests.add(cmd.requestId);
+
+    this._events.push({
+      name: "ActionSubmitted",
+      roomId: this.roomId,
+      version: this.version,
+      floor: this.currentFloor,
+      openId: cmd.openId,
+      sequence: submission.sequence,
+      sourceStage: Stage.bet,
+    } as ActionSubmitted);
+  }
+
+  revealEnvironment(cmd: RevealEnvironmentCommand): void {
+    if (this.processedRequests.has(cmd.requestId)) return;
+    if (this.currentStage !== Stage.environment) throw new Error("Not in environment stage");
+
+    const deckEntry = this.deck.find((d) => d.position === this.currentFloor);
+    if (!deckEntry) throw new Error(`No deck entry at position ${this.currentFloor}`);
+
+    const currentRound = this.getCurrentRound();
+    if (!currentRound) throw new Error("No current round");
+
+    const code = deckEntry.environmentCardCode;
+    const gasCards = new Set(["gas", "smelly_gas", "stuffy_gas"]);
+    const roundKind = gasCards.has(code) ? "gas" : "safe";
+    currentRound.environmentCardCode = code;
+    currentRound.roundKind = roundKind as "gas" | "safe";
+
+    this.version++;
+    this.processedRequests.add(cmd.requestId);
+
+    this._events.push({
+      name: "EnvironmentRevealed",
+      roomId: this.roomId,
+      version: this.version,
+      floor: this.currentFloor,
+      environmentCard: code,
+      roundKind,
+    } as EnvironmentRevealed);
   }
 
   submitVote(cmd: SubmitVoteCommand): void {
-    if (this.currentStage !== Stage.discussionVote) {
-      throw new Error("Cannot submit vote: not in discussionVote stage");
-    }
-    if (!cmd.voteTarget) {
-      throw new Error("voteTarget is required");
-    }
+    if (this.processedRequests.has(cmd.requestId)) return;
+    if (this.currentStage !== Stage.vote && this.currentStage !== Stage.tieBreak)
+      throw new Error("Not in vote stage");
 
-    const player = this.requirePlayer(cmd.openId);
-    player.submitVote(cmd.voteTarget);
+    const player = this.matchPlayers.get(cmd.openId);
+    if (!player) throw new Error(`Player ${cmd.openId} not in match`);
+    if (!player.canVote) throw new Error(`Player ${cmd.openId} cannot vote`);
 
-    const round = this.currentRound();
-    round.voteSubmissions = round.voteSubmissions.filter((item) => item.openId !== cmd.openId);
-    round.voteSubmissions.push({
-      openId: cmd.openId,
-      voteTarget: cmd.voteTarget,
-      votePowerAtSubmit: player.votePower,
-      submittedAt: new Date(),
+    const currentRound = this.getCurrentRound();
+    if (!currentRound) throw new Error("No current round");
+    if (cmd.voteRound !== currentRound.currentVoteRound)
+      throw new Error(`voteRound mismatch: expected ${currentRound.currentVoteRound}, got ${cmd.voteRound}`);
+
+    currentRound.voteSubmissions.push({
+      voteRound: cmd.voteRound,
+      voterOpenId: cmd.openId,
+      targetOpenId: cmd.voteTarget,
+      votePowerAtSubmit: cmd.votePowerAtSubmit,
     });
     this.version++;
+    this.processedRequests.add(cmd.requestId);
 
-    const event: VoteSubmitted = {
+    this._events.push({
       name: "VoteSubmitted",
       roomId: this.roomId,
-      round: this.currentRoundNumber,
-      openId: cmd.openId,
-      voteTarget: cmd.voteTarget,
-      votePowerAtSubmit: player.votePower,
       version: this.version,
-    };
-    this._events.push(event);
+      floor: this.currentFloor,
+      voteRound: cmd.voteRound,
+      openId: cmd.openId,
+      votePowerAtSubmit: cmd.votePowerAtSubmit,
+    } as VoteSubmitted);
   }
 
   advanceStage(cmd: AdvanceStageCommand): void {
-    if (cmd.openId !== this.ownerOpenId && !cmd.timeoutFlag) {
-      throw new Error("Only the room owner can advance the stage");
-    }
-    if (this.gameState === GameState.ended) {
-      throw new Error("Game has already ended");
+    if (this.processedRequests.has(cmd.requestId)) return;
+    const isTimeout = cmd.trigger === "timeout";
+    if (!isTimeout && cmd.openId !== this.ownerOpenId)
+      throw new Error("Only owner can advance stage");
+
+    const fromStage = this.currentStage;
+
+    // Validate preparation→bet: all players must have confirmed role
+    if (fromStage === Stage.preparation) {
+      const allConfirmed = [...this.matchPlayers.values()].every((p) => p.state.chosenRoleCode !== null);
+      if (!allConfirmed) throw new Error("Not all players have confirmed their role selection");
     }
 
-    const previousStage = this.currentStage;
+    let isTieVote = false;
+    let isFinal = false;
+    let resolvedVoteResult: VoteResult | null = null;
+    let nextFloor = this.currentFloor;
 
-    if (previousStage === Stage.bet) {
-      this.revealEnvironmentForCurrentRound();
-    }
-
-    if (previousStage === Stage.action) {
+    // Stage-specific pre-advance logic
+    if (fromStage === Stage.action) {
+      // action → damage: run settlement
       this.runSettlement();
-      if (this.checkWinner()) {
-        this.emitStageAdvanced(previousStage, Stage.review);
+    } else if (fromStage === Stage.vote || fromStage === Stage.tieBreak) {
+      // Resolve votes for current voteRound
+      resolvedVoteResult = this.resolveVotes();
+      isTieVote = resolvedVoteResult.isTie;
+    } else if (fromStage === Stage.settlement) {
+      // Check winner
+      const gasRounds = this.rounds.filter((r) => r.roundKind === "gas" && r.settlementResult !== null).length;
+      const aliveByCamp = this.countAliveByCamp();
+      const judgement = this.winnerJudgementService.judge({
+        aliveByCamp,
+        currentFloor: this.currentFloor,
+        resolvedGasRounds: gasRounds,
+      });
+      isFinal = judgement.isFinal;
+
+      if (resolvedVoteResult) {
+        this._events.push({
+          name: "VoteResolved",
+          roomId: this.roomId,
+          version: this.version,
+          floor: this.currentFloor,
+          voteRound: this.getCurrentRound()?.currentVoteRound ?? 1,
+          voteResult: resolvedVoteResult,
+          nextStage: isFinal ? Stage.settlement : Stage.preparation,
+        } as VoteResolved);
+      }
+
+      if (isFinal && judgement.winnerCamp) {
+        this.winnerResult = {
+          winnerCamp: judgement.winnerCamp,
+          reason: judgement.reason,
+          decidedAt: new Date(),
+        };
+        this.gameState = GameState.end;
+        this.version++;
+        this.processedRequests.add(cmd.requestId);
+
+        this._events.push({
+          name: "WinnerDecided",
+          roomId: this.roomId,
+          version: this.version,
+          winnerCamp: judgement.winnerCamp,
+          reason: judgement.reason,
+          decidedAt: this.winnerResult.decidedAt,
+        } as WinnerDecided);
+
+        this._events.push({
+          name: "StageAdvanced",
+          roomId: this.roomId,
+          version: this.version,
+          currentFloor: this.currentFloor,
+          fromStage,
+          toStage: Stage.settlement,
+          currentVoteRound: this.getCurrentRound()?.currentVoteRound ?? 1,
+        } as StageAdvanced);
         return;
       }
+
+      // Not final: move to next floor
+      nextFloor = this.currentFloor + 1;
     }
 
-    if (previousStage === Stage.discussionVote) {
-      const resolution = this.resolveVotes();
-      if (resolution.needRevote) {
-        return;
-      }
-      if (this.checkWinner()) {
-        this.emitStageAdvanced(previousStage, Stage.review);
-        return;
-      }
-      if (this.currentRoundNumber < 8) {
-        this.startNextRound();
-        this.emitStageAdvanced(previousStage, Stage.bet);
-        return;
-      }
-      this.checkWinner();
-      this.emitStageAdvanced(previousStage, this.currentStage);
-      return;
+    // tieBreak → vote: increment voteRound
+    if (fromStage === Stage.tieBreak) {
+      const round = this.getCurrentRound();
+      if (round) round.currentVoteRound++;
     }
 
-    const nextStage = this.stageFlowService.next({ current: previousStage });
+    const nextStage = this.stageFlowService.next({ currentStage: fromStage, isTieVote, isFinal });
+
+    // Emit VoteResolved if we just resolved a vote going to settlement
+    if ((fromStage === Stage.vote || fromStage === Stage.tieBreak) && nextStage === Stage.settlement && resolvedVoteResult) {
+      this._events.push({
+        name: "VoteResolved",
+        roomId: this.roomId,
+        version: this.version,
+        floor: this.currentFloor,
+        voteRound: this.getCurrentRound()?.currentVoteRound ?? 1,
+        voteResult: resolvedVoteResult,
+        nextStage,
+      } as VoteResolved);
+    }
+
     this.currentStage = nextStage;
-    this.version++;
 
-    const event: StageAdvanced = {
+    // If advancing to preparation for next floor
+    if (nextStage === Stage.preparation && nextFloor > this.currentFloor) {
+      this.currentFloor = nextFloor;
+      // Create new round shell
+      this.rounds.push({
+        floor: this.currentFloor,
+        environmentCardCode: null,
+        roundKind: null,
+        currentVoteRound: 1,
+        actionSubmissions: [],
+        voteSubmissions: [],
+        settlementResult: null,
+        voteResult: null,
+      });
+    }
+
+    this.version++;
+    this.processedRequests.add(cmd.requestId);
+
+    this._events.push({
       name: "StageAdvanced",
       roomId: this.roomId,
-      previousStage,
-      currentStage: nextStage,
-      currentRound: this.currentRoundNumber,
       version: this.version,
-    };
-    this._events.push(event);
+      currentFloor: this.currentFloor,
+      fromStage,
+      toStage: nextStage,
+      currentVoteRound: this.getCurrentRound()?.currentVoteRound ?? 1,
+    } as StageAdvanced);
   }
 
-  private emitStageAdvanced(previousStage: Stage, currentStage: Stage): void {
-    this.currentStage = currentStage;
-    this.version++;
-    const event: StageAdvanced = {
-      name: "StageAdvanced",
-      roomId: this.roomId,
-      previousStage,
-      currentStage,
-      currentRound: this.currentRoundNumber,
-      version: this.version,
-    };
-    this._events.push(event);
-  }
+  // ── Private helpers ───────────────────────────────────────────────────────────
 
-  private addPlayer(input: { openId: string; nickname: string; avatar: string }): number {
-    const seatNo = this.playerCount + 1;
-    this.players.set(
-      input.openId,
-      new Player({
-        openId: input.openId,
-        nickname: input.nickname,
-        avatar: input.avatar,
-        seatNo,
-      })
-    );
-    this.playerCount++;
-    return seatNo;
-  }
-
-  private assertOwner(openId: string): void {
-    if (openId !== this.ownerOpenId) {
-      throw new Error("Only the room owner can perform this operation");
-    }
-  }
-
-  private assertLobbyState(): void {
-    if (this.currentStage !== Stage.lobby || this.gameState !== GameState.wait) {
-      throw new Error("Room can only be modified in lobby stage");
-    }
-  }
-
-  private requirePlayer(openId: string): Player {
-    const player = this.players.get(openId);
-    if (!player) {
-      throw new Error(`Player ${openId} not found`);
-    }
-    return player;
-  }
-
-  private allPlayersReady(): boolean {
-    if (this.playerCount !== this.roomConfig.playerCount) {
-      return false;
-    }
-    return [...this.players.values()].every((player) => player.isReady);
-  }
-
-  private startRoleSelection(): void {
-    const assignments = this.dealService.deal({
-      players: [...this.players.values()]
-        .sort((left, right) => left.seatNo - right.seatNo)
-        .map((player) => player.openId),
-      roomConfig: this.roomConfig,
-      seed: `${this.roomId}:roles`,
-    });
-    for (const assignment of assignments) {
-      this.players.get(assignment.openId)?.setCandidateRoles(assignment.roles);
-    }
-
-    this.gameState = GameState.selecting;
-    this.currentStage = Stage.roleSelection;
-    this.version++;
-
-    const event: RoleSelectionStarted = {
-      name: "RoleSelectionStarted",
-      roomId: this.roomId,
-      candidateRoles: assignments,
-      currentStage: Stage.roleSelection,
-      version: this.version,
-    };
-    this._events.push(event);
-  }
-
-  private allRolesSelected(): boolean {
-    return [...this.players.values()].every((player) => player.selectedRole !== null);
-  }
-
-  private currentRound(): Round {
-    const round = this.rounds.find((item) => item.round === this.currentRoundNumber);
-    if (!round) {
-      throw new Error(`No round found for round ${this.currentRoundNumber}`);
-    }
-    return round;
-  }
-
-  private revealEnvironmentForCurrentRound(): void {
-    const round = this.currentRound();
-    if (round.environmentCard) {
-      return;
-    }
-    const environmentCard = this.envDeck[this.currentRoundNumber - 1];
-    if (!environmentCard) {
-      throw new Error("No environment card available for current round");
-    }
-    round.environmentCard = environmentCard;
-    this.version++;
-
-    const event: EnvironmentRevealed = {
-      name: "EnvironmentRevealed",
-      roomId: this.roomId,
-      round: this.currentRoundNumber,
-      environmentCard,
-      version: this.version,
-    };
-    this._events.push(event);
+  private getCurrentRound(): RoundState | undefined {
+    return this.rounds.find((r) => r.floor === this.currentFloor);
   }
 
   private runSettlement(): void {
-    const round = this.currentRound();
-    if (!round.environmentCard) {
-      throw new Error("Cannot settle round before revealing environment");
-    }
-    if (round.settlementResult) {
-      return;
+    const round = this.getCurrentRound();
+    if (!round) return;
+
+    const players = [...this.matchPlayers.values()].map((p) => ({
+      openId: p.openId,
+      currentHp: p.currentHp,
+      isAlive: p.isAlive,
+    }));
+
+    const result = this.settlementService.settle({
+      floor: this.currentFloor,
+      environmentCardCode: round.environmentCardCode,
+      actionSubmissions: round.actionSubmissions,
+      players,
+    });
+
+    round.settlementResult = result;
+
+    // Apply damages to match players
+    for (const dmg of result.damages) {
+      const player = this.matchPlayers.get(dmg.openId);
+      player?.applyDamage(dmg.damage);
     }
 
-    const output = this.settlementService.settle(
-      round.environmentCard,
-      round.betSubmissions,
-      [...this.players.values()].map((player) => ({
-        openId: player.openId,
-        hp: player.hp,
-        isAlive: player.isAlive,
-      }))
-    );
-
-    for (const record of output.settlementResult.damages) {
-      this.players.get(record.openId)?.resolveDamage(record.damage);
-    }
-    for (const record of output.settlementResult.heals) {
-      this.players.get(record.openId)?.applyHeal(record.heal);
-    }
-    for (const player of this.players.values()) {
-      player.resolveRoundPermission();
-    }
-
-    round.actionLogs = output.actionLogs;
-    round.settlementResult = output.settlementResult;
-    this.version++;
-
-    const event: RoundSettled = {
+    this._events.push({
       name: "RoundSettled",
       roomId: this.roomId,
-      round: this.currentRoundNumber,
-      settlementResult: output.settlementResult,
       version: this.version,
-    };
-    this._events.push(event);
-
-    for (const openId of output.settlementResult.eliminated) {
-      this.version++;
-      const eliminatedEvent: PlayerEliminated = {
-        name: "PlayerEliminated",
-        roomId: this.roomId,
-        openId,
-        round: this.currentRoundNumber,
-        version: this.version,
-      };
-      this._events.push(eliminatedEvent);
-    }
+      floor: this.currentFloor,
+      stage: Stage.action,
+      settlementResult: result,
+    } as RoundSettled);
   }
 
-  private resolveVotes(): { needRevote: boolean; voteResult: VoteResult } {
-    const round = this.currentRound();
-    const tally = new Map<string, number>();
-    for (const submission of round.voteSubmissions) {
-      tally.set(
-        submission.voteTarget,
-        (tally.get(submission.voteTarget) ?? 0) + submission.votePowerAtSubmit
-      );
+  private resolveVotes(): VoteResult {
+    const round = this.getCurrentRound();
+    const currentVoteRound = round?.currentVoteRound ?? 1;
+    const submissions = (round?.voteSubmissions ?? []).filter(
+      (s) => s.voteRound === currentVoteRound
+    );
+
+    // Tally votes
+    const tallyMap = new Map<string, number>();
+    for (const s of submissions) {
+      if (s.targetOpenId) {
+        tallyMap.set(s.targetOpenId, (tallyMap.get(s.targetOpenId) ?? 0) + s.votePowerAtSubmit);
+      }
     }
 
+    // Find max
     let maxVotes = 0;
-    for (const value of tally.values()) {
-      maxVotes = Math.max(maxVotes, value);
+    for (const votes of tallyMap.values()) {
+      if (votes > maxVotes) maxVotes = votes;
     }
+    const topTargets = [...tallyMap.entries()]
+      .filter(([, v]) => v === maxVotes)
+      .map(([k]) => k);
 
-    const tieTargets = [...tally.entries()]
-      .filter(([, value]) => value === maxVotes)
-      .map(([openId]) => openId);
-    const isTie = tieTargets.length > 1;
-    const needRevote = isTie && round.revoteCount === 0;
-    const targetOpenId = isTie ? null : tieTargets[0] ?? null;
+    const isTie = topTargets.length > 1;
+    const targetOpenId = isTie ? null : (topTargets[0] ?? null);
 
-    const voteResult: VoteResult = {
+    const result: VoteResult = {
       targetOpenId,
       votes: maxVotes,
       isTie,
-      tieTargets: isTie ? tieTargets : [],
-      needRevote,
+      tieTargets: isTie ? topTargets : [],
     };
-    round.voteResult = voteResult;
-    if (needRevote) {
-      round.revoteCount += 1;
-      round.voteSubmissions = [];
-    } else if (targetOpenId) {
-      this.players.get(targetOpenId)?.eliminate();
+
+    if (round) round.voteResult = result;
+
+    // Eliminate voted player if not a tie
+    if (targetOpenId) {
+      const player = this.matchPlayers.get(targetOpenId);
+      player?.eliminate();
     }
 
-    this.version++;
-    const event: VoteResolved = {
-      name: "VoteResolved",
-      roomId: this.roomId,
-      round: this.currentRoundNumber,
-      voteResult,
-      version: this.version,
-    };
-    this._events.push(event);
-
-    if (!needRevote && targetOpenId) {
-      this.version++;
-      const eliminatedEvent: PlayerEliminated = {
-        name: "PlayerEliminated",
-        roomId: this.roomId,
-        openId: targetOpenId,
-        round: this.currentRoundNumber,
-        version: this.version,
-      };
-      this._events.push(eliminatedEvent);
-    }
-
-    return { needRevote, voteResult };
+    return result;
   }
 
-  private startNextRound(): void {
-    this.currentRoundNumber += 1;
-    this.rounds.push(buildInitialRound(this.currentRoundNumber));
-    for (const player of this.players.values()) {
-      player.resetRoundState();
+  private countAliveByCamp(): { passenger: number; fatter: number } {
+    let passenger = 0;
+    let fatter = 0;
+    for (const p of this.matchPlayers.values()) {
+      if (!p.isAlive) continue;
+      if (p.state.identityCode === "fatter") fatter++;
+      else passenger++;
     }
-  }
-
-  private checkWinner(): boolean {
-    if (this.gameState === GameState.ended) {
-      return true;
-    }
-
-    const aliveByRole: Record<string, number> = {};
-    let aliveCount = 0;
-    for (const player of this.players.values()) {
-      if (!player.isAlive) {
-        continue;
-      }
-      aliveCount += 1;
-      const role = player.selectedRole;
-      if (!role) {
-        continue;
-      }
-      aliveByRole[role] = (aliveByRole[role] ?? 0) + 1;
-    }
-
-    const result = this.winnerJudgementService.judge({
-      aliveByRole,
-      currentRound: this.currentRoundNumber,
-      allEliminated: aliveCount === 0,
-    });
-    if (!result.isFinal || !result.winnerResult) {
-      return false;
-    }
-
-    this.winnerResult = result.winnerResult;
-    this.gameState = GameState.ended;
-    this.currentStage = Stage.review;
-    this.version++;
-
-    const event: WinnerDecided = {
-      name: "WinnerDecided",
-      roomId: this.roomId,
-      winnerCamp: result.winnerResult.winnerCamp,
-      reason: result.winnerResult.reason,
-      decidedAt: result.winnerResult.decidedAt,
-      version: this.version,
-    };
-    this._events.push(event);
-    return true;
-  }
-
-  private reseatPlayers(): void {
-    [...this.players.values()]
-      .sort((left, right) => left.seatNo - right.seatNo)
-      .forEach((player, index) => player.setSeatNo(index + 1));
-  }
-
-  private static validateRoomConfig(roomConfig: RoomConfig): void {
-    if (!roomConfig) {
-      throw new Error("roomConfig is required");
-    }
-    if (roomConfig.playerCount < 5 || roomConfig.playerCount > 10) {
-      throw new Error(`playerCount must be between 5 and 10, got ${roomConfig.playerCount}`);
-    }
-    if (!["independent", "faction"].includes(roomConfig.roleConfig)) {
-      throw new Error(`Invalid roleConfig: ${roomConfig.roleConfig}`);
-    }
+    return { passenger, fatter };
   }
 }

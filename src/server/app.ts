@@ -7,61 +7,12 @@ import { timingSafeEqual } from "crypto";
 import express, { NextFunction, Request, Response } from "express";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { Room, RoomSnapshot } from "../domain/aggregates/Room";
-import { ActionCard, GameState, Role, RoleConfig, RoomConfig } from "../domain/types";
+import { GameState } from "../domain/types";
 import { createRoomRepository, RoomRepository, RoomStore } from "./roomRepository";
 import { createUserRepository, UserRepository } from "./userRepository";
 import { uuidv4 } from "../utils/uuid";
 
 export type { RoomStore } from "./roomRepository";
-
-// ──────────────────────────────────────────────
-// Validation helpers
-// ──────────────────────────────────────────────
-
-const VALID_ROLE_CONFIGS: ReadonlySet<string> = new Set<RoleConfig>(["independent", "faction"]);
-const VALID_ACTION_CARDS: ReadonlySet<string> = new Set(Object.values(ActionCard));
-const VALID_ROLES: ReadonlySet<string> = new Set(Object.values(Role));
-
-function validateRoleConfig(value: unknown): RoleConfig {
-  if (typeof value !== "string" || !VALID_ROLE_CONFIGS.has(value)) {
-    throw Object.assign(
-      new Error(`Invalid roleConfig "${value}". Must be one of: ${[...VALID_ROLE_CONFIGS].join(", ")}`),
-      { status: 400 }
-    );
-  }
-  return value as RoleConfig;
-}
-
-function validateActionCard(value: unknown): ActionCard {
-  if (typeof value !== "string" || !VALID_ACTION_CARDS.has(value)) {
-    throw Object.assign(
-      new Error(`Invalid actionCard "${value}". Must be one of: ${[...VALID_ACTION_CARDS].join(", ")}`),
-      { status: 400 }
-    );
-  }
-  return value as ActionCard;
-}
-
-function validateRoomConfig(value: unknown): RoomConfig {
-  if (!value || typeof value !== "object") {
-    throw Object.assign(new Error("roomConfig is required"), { status: 400 });
-  }
-  const roomConfig = value as { playerCount?: unknown; roleConfig?: unknown };
-  if (typeof roomConfig.playerCount !== "number" || roomConfig.playerCount < 5 || roomConfig.playerCount > 10) {
-    throw Object.assign(new Error("playerCount must be a number between 5 and 10"), { status: 400 });
-  }
-  return {
-    playerCount: roomConfig.playerCount,
-    roleConfig: validateRoleConfig(roomConfig.roleConfig),
-  };
-}
-
-function validateRole(value: unknown): Role {
-  if (typeof value !== "string" || !VALID_ROLES.has(value)) {
-    throw Object.assign(new Error(`Invalid roleId "${value}"`), { status: 400 });
-  }
-  return value as Role;
-}
 
 // ──────────────────────────────────────────────
 // App factory
@@ -256,15 +207,15 @@ function requireAdminAuth(req: Request, res: Response, next: NextFunction): void
 }
 
 async function buildAdminOverview(roomRepository: RoomRepository) {
-  const snapshots = (await roomRepository.list()).map((room) => room.snapshot());
+  const snapshots = await roomRepository.list();
   const activeRooms = snapshots
-    .filter((room) => room.playerCount > 0 && room.gameState !== GameState.ended)
-    .sort((left, right) => right.playerCount - left.playerCount || left.roomCode.localeCompare(right.roomCode));
+    .filter((room) => room.playerCount > 0 && room.gameState !== GameState.end)
+    .sort((left, right) => right.playerCount - left.playerCount || left.roomId.localeCompare(right.roomId));
 
   const users = new Map<string, InternalAdminOverviewUser>();
 
   for (const room of activeRooms) {
-    for (const player of room.players) {
+    for (const player of room.roomPlayers) {
       const existing = users.get(player.openId);
       if (!existing) {
         users.set(player.openId, {
@@ -272,21 +223,17 @@ async function buildAdminOverview(roomRepository: RoomRepository) {
           nickname: player.nickname,
           avatar: player.avatar,
           isReady: player.isReady,
-          isAlive: player.isAlive,
+          isAlive: true,
           roomIds: [room.roomId],
-          roomCodes: [room.roomCode],
-          lastJoinTime: player.joinTime,
+          roomCodes: [room.roomId],
+          lastJoinTime: new Date(),
         });
         continue;
       }
 
       if (!existing.roomIds.includes(room.roomId)) existing.roomIds.push(room.roomId);
-      if (!existing.roomCodes.includes(room.roomCode)) existing.roomCodes.push(room.roomCode);
+      if (!existing.roomCodes.includes(room.roomId)) existing.roomCodes.push(room.roomId);
       existing.isReady = existing.isReady || player.isReady;
-      existing.isAlive = existing.isAlive || player.isAlive;
-      if (player.joinTime > existing.lastJoinTime) {
-        existing.lastJoinTime = player.joinTime;
-      }
     }
   }
 
@@ -304,22 +251,20 @@ async function buildAdminOverview(roomRepository: RoomRepository) {
       })),
     rooms: activeRooms.map((room: RoomSnapshot): AdminOverviewRoom => ({
       roomId: room.roomId,
-      roomCode: room.roomCode,
+      roomCode: room.roomId,
       ownerOpenId: room.ownerOpenId,
       gameState: room.gameState,
       currentStage: room.currentStage,
       playerCount: room.playerCount,
-      configuredPlayerCount: room.roomConfig.playerCount,
-      players: room.players
-        .map((player) => ({
-          openId: player.openId,
-          nickname: player.nickname,
-          avatar: player.avatar,
-          isReady: player.isReady,
-          isAlive: player.isAlive,
-          joinTime: player.joinTime.toISOString(),
-        }))
-        .sort((left, right) => left.joinTime.localeCompare(right.joinTime)),
+      configuredPlayerCount: room.playerCount,
+      players: room.roomPlayers.map((player) => ({
+        openId: player.openId,
+        nickname: player.nickname,
+        avatar: player.avatar,
+        isReady: player.isReady,
+        isAlive: true,
+        joinTime: new Date().toISOString(),
+      })),
     })),
     apiDocsMarkdown: API_DOCS_MARKDOWN,
     generatedAt: new Date().toISOString(),
@@ -397,13 +342,16 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   // ── POST /rooms ──────────────────────────────
   app.post("/rooms", async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { ownerOpenId, roomConfig: rawRoomConfig, requestId = uuidv4() } = req.body as {
+      const { ownerOpenId, ruleSetCode, deckTemplateCode, requestId = uuidv4() } = req.body as {
         ownerOpenId: string;
-        roomConfig: unknown;
+        ruleSetCode: string;
+        deckTemplateCode: string;
         requestId?: string;
       };
-      const roomConfig = validateRoomConfig(rawRoomConfig);
-      const room = Room.create({ requestId, ownerOpenId, roomConfig });
+      if (!ownerOpenId) throw Object.assign(new Error("ownerOpenId is required"), { status: 400 });
+      if (!ruleSetCode) throw Object.assign(new Error("ruleSetCode is required"), { status: 400 });
+      if (!deckTemplateCode) throw Object.assign(new Error("deckTemplateCode is required"), { status: 400 });
+      const room = Room.create({ requestId, ownerOpenId, ruleSetCode, deckTemplateCode });
       await persist(room);
       res.status(201).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
@@ -447,34 +395,17 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
     }
   });
 
-  app.post("/rooms/:roomId/config", async (req: Request, res: Response, next: NextFunction) => {
+  // ── POST /rooms/:roomId/start ─────────────────
+  app.post("/rooms/:roomId/start", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const { openId, roomConfig: rawRoomConfig, requestId = uuidv4() } = req.body as {
+      const { openId, seed = uuidv4(), requestId = uuidv4() } = req.body as {
         openId: string;
-        roomConfig: unknown;
-        requestId?: string;
-      };
-      const roomConfig = validateRoomConfig(rawRoomConfig);
-      const room = await loadRoom(roomId);
-      room.updateRoomConfig({ requestId, roomId, openId, roomConfig });
-      await persist(room);
-      res.status(200).json({ events: room.events, room: room.snapshot() });
-    } catch (err) {
-      asDomainError(err); next(err);
-    }
-  });
-
-  app.post("/rooms/:roomId/ready", async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const roomId = String(req.params["roomId"]);
-      const { openId, ready, requestId = uuidv4() } = req.body as {
-        openId: string;
-        ready: boolean;
+        seed?: string;
         requestId?: string;
       };
       const room = await loadRoom(roomId);
-      room.setReady({ requestId, roomId, openId, ready });
+      room.startGame({ requestId, roomId, openId, seed });
       await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
@@ -485,14 +416,13 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   app.post("/rooms/:roomId/role-selection", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const { openId, roleId: rawRoleId, requestId = uuidv4() } = req.body as {
+      const { openId, roleCode, requestId = uuidv4() } = req.body as {
         openId: string;
-        roleId: unknown;
+        roleCode: string;
         requestId?: string;
       };
-      const roleId = validateRole(rawRoleId);
       const room = await loadRoom(roomId);
-      room.confirmRoleSelection({ requestId, roomId, openId, roleId });
+      room.confirmRoleSelection({ requestId, roomId, openId, roleCode });
       await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
@@ -500,18 +430,31 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
     }
   });
 
-  app.post("/rooms/:roomId/bets", async (req: Request, res: Response, next: NextFunction) => {
+  // ── POST /rooms/:roomId/actions ───────────────
+  app.post("/rooms/:roomId/actions", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const { openId, actionCard: rawActionCard, passedBet, requestId = uuidv4() } = req.body as {
+      const { openId, cardInstanceId, requestId = uuidv4() } = req.body as {
         openId: string;
-        actionCard?: unknown;
-        passedBet?: boolean;
+        cardInstanceId: string;
         requestId?: string;
       };
-      const actionCard = rawActionCard === undefined ? undefined : validateActionCard(rawActionCard);
       const room = await loadRoom(roomId);
-      room.submitBet({ requestId, roomId, openId, selectedAction: actionCard, passedBet });
+      room.submitAction({ requestId, roomId, openId, cardInstanceId });
+      await persist(room);
+      res.status(200).json({ events: room.events, room: room.snapshot() });
+    } catch (err) {
+      asDomainError(err); next(err);
+    }
+  });
+
+  // ── POST /rooms/:roomId/environment/reveal ────
+  app.post("/rooms/:roomId/environment/reveal", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const roomId = String(req.params["roomId"]);
+      const { requestId = uuidv4() } = (req.body ?? {}) as { requestId?: string };
+      const room = await loadRoom(roomId);
+      room.revealEnvironment({ requestId, roomId });
       await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
@@ -522,13 +465,15 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   app.post("/rooms/:roomId/votes", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const { openId, voteTarget, requestId = uuidv4() } = req.body as {
+      const { openId, voteRound, voteTarget, votePowerAtSubmit, requestId = uuidv4() } = req.body as {
         openId: string;
-        voteTarget: string;
+        voteRound: number;
+        voteTarget: string | null;
+        votePowerAtSubmit: number;
         requestId?: string;
       };
       const room = await loadRoom(roomId);
-      room.submitVote({ requestId, roomId, openId, voteTarget });
+      room.submitVote({ requestId, roomId, openId, voteRound, voteTarget: voteTarget ?? null, votePowerAtSubmit: votePowerAtSubmit ?? 1 });
       await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
@@ -537,17 +482,16 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   });
 
   // ── POST /rooms/:roomId/stage/advance ────────
-  // Body: { openId, timeoutFlag?, requestId? }
   app.post("/rooms/:roomId/stage/advance", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const { openId, timeoutFlag, requestId = uuidv4() } = req.body as {
-        openId: string;
-        timeoutFlag?: boolean;
+      const { openId, trigger, requestId = uuidv4() } = req.body as {
+        openId?: string;
+        trigger?: "ownerCommand" | "timeout";
         requestId?: string;
       };
       const room = await loadRoom(roomId);
-      room.advanceStage({ requestId, roomId, openId, timeoutFlag });
+      room.advanceStage({ requestId, roomId, openId, trigger });
       await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {

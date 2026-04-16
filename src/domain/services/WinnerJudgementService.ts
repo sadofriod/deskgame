@@ -1,80 +1,52 @@
-import { Role, WinnerCamp, WinnerResult } from "../types";
-
-export interface AliveByRole {
-  [role: string]: number;
-}
+import { Camp } from "../types";
 
 export interface JudgementInput {
-  aliveByRole: AliveByRole;
-  currentRound: number;
-  allEliminated?: boolean;
+  aliveByCamp: { passenger: number; fatter: number };
+  currentFloor: number;
+  resolvedGasRounds: number;
 }
 
-export interface JudgementResult {
+export interface JudgementOutput {
+  winnerCamp: Camp | null;
+  reason: string;
   isFinal: boolean;
-  winnerResult?: WinnerResult;
-}
-
-const FATTER_ROLES = new Set<string>([Role.fatter, Role.fatter1, Role.fatter2]);
-
-function buildWinnerResult(winnerCamp: WinnerCamp, reason: string): WinnerResult {
-  return { winnerCamp, reason, decidedAt: new Date() };
-}
-
-function countFatters(aliveByRole: AliveByRole): number {
-  return Object.entries(aliveByRole)
-    .filter(([role]) => FATTER_ROLES.has(role))
-    .reduce((sum, [, count]) => sum + count, 0);
-}
-
-function countPassengers(aliveByRole: AliveByRole): number {
-  return aliveByRole[Role.passenger] ?? 0;
 }
 
 export class WinnerJudgementService {
-  judge(input: JudgementInput): JudgementResult {
-    const fatters = countFatters(input.aliveByRole);
-    const passengers = countPassengers(input.aliveByRole);
-    const total = fatters + passengers;
+  judge(input: JudgementInput): JudgementOutput {
+    const { aliveByCamp, currentFloor, resolvedGasRounds } = input;
+    const { passenger, fatter } = aliveByCamp;
 
-    if (input.allEliminated || total === 0) {
+    // alivePassenger <= aliveFatter → fatter wins (covers all-eliminated case too)
+    if (passenger <= fatter) {
       return {
+        winnerCamp: Camp.fatter,
+        reason:
+          passenger === 0 && fatter === 0
+            ? "All players eliminated"
+            : "Passengers no longer outnumber fatters",
         isFinal: true,
-        winnerResult: buildWinnerResult(WinnerCamp.draw, "All players eliminated"),
       };
     }
 
-    if (passengers === 0) {
+    // resolvedGasRounds >= 4 → fatter wins
+    if (resolvedGasRounds >= 4) {
       return {
+        winnerCamp: Camp.fatter,
+        reason: "4 gas rounds completed",
         isFinal: true,
-        winnerResult: buildWinnerResult(WinnerCamp.fatter, "All passengers eliminated"),
       };
     }
 
-    if (fatters === 0) {
+    // floor 8 settlement finished with passenger > fatter → passenger wins
+    if (currentFloor >= 8) {
       return {
+        winnerCamp: Camp.passenger,
+        reason: "Passengers survived all 8 floors",
         isFinal: true,
-        winnerResult: buildWinnerResult(WinnerCamp.passenger, "All fatters eliminated"),
       };
     }
 
-    if (passengers <= fatters) {
-      return {
-        isFinal: true,
-        winnerResult: buildWinnerResult(WinnerCamp.fatter, "Alive passengers ≤ alive fatters"),
-      };
-    }
-
-    if (input.currentRound >= 8 && passengers > fatters) {
-      return {
-        isFinal: true,
-        winnerResult: buildWinnerResult(
-          WinnerCamp.passenger,
-          "Survived 8 rounds with more passengers than fatters"
-        ),
-      };
-    }
-
-    return { isFinal: false };
+    return { winnerCamp: null, reason: "", isFinal: false };
   }
 }

@@ -2,7 +2,6 @@ export * from "./domain/types";
 export * from "./domain/events";
 export * from "./domain/entities/Player";
 export * from "./domain/aggregates/Room";
-export * from "./domain/aggregates/Match";
 export * from "./domain/services/DealService";
 export * from "./domain/services/EnvironmentDeckService";
 export * from "./domain/services/SettlementService";

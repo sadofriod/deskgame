@@ -8,18 +8,15 @@ import { RoomGateway } from "../gateway/RoomGateway";
 import { WsMessage } from "../gateway/types";
 import { io as connectClient, Socket } from "socket.io-client";
 
-// ──────────────────────────────────────────────
-// RoomRegistry tests
-// ──────────────────────────────────────────────
+const RULE_SET = "classic_v1";
+const DECK_TMPL = "classic_pool_v1";
+
+// ── RoomRegistry tests ────────────────────────────────────────────────────────
 
 describe("RoomRegistry", () => {
   it("stores and retrieves a room", () => {
     const registry = new RoomRegistry();
-    const room = Room.create({
-      requestId: "r1",
-      ownerOpenId: "owner1",
-      roomConfig: { playerCount: 5, roleConfig: "independent" },
-    });
+    const room = Room.create({ requestId: "r1", ownerOpenId: "owner1", ruleSetCode: RULE_SET, deckTemplateCode: DECK_TMPL });
     registry.set(room.id, room);
     expect(registry.get(room.id)).toBe(room);
   });
@@ -31,11 +28,7 @@ describe("RoomRegistry", () => {
 
   it("has() reflects presence correctly", () => {
     const registry = new RoomRegistry();
-    const room = Room.create({
-      requestId: "r2",
-      ownerOpenId: "owner2",
-      roomConfig: { playerCount: 5, roleConfig: "independent" },
-    });
+    const room = Room.create({ requestId: "r2", ownerOpenId: "owner2", ruleSetCode: RULE_SET, deckTemplateCode: DECK_TMPL });
     expect(registry.has(room.id)).toBe(false);
     registry.set(room.id, room);
     expect(registry.has(room.id)).toBe(true);
@@ -43,11 +36,7 @@ describe("RoomRegistry", () => {
 
   it("delete() removes a room", () => {
     const registry = new RoomRegistry();
-    const room = Room.create({
-      requestId: "r3",
-      ownerOpenId: "owner3",
-      roomConfig: { playerCount: 5, roleConfig: "independent" },
-    });
+    const room = Room.create({ requestId: "r3", ownerOpenId: "owner3", ruleSetCode: RULE_SET, deckTemplateCode: DECK_TMPL });
     registry.set(room.id, room);
     registry.delete(room.id);
     expect(registry.has(room.id)).toBe(false);
@@ -56,8 +45,8 @@ describe("RoomRegistry", () => {
   it("size() tracks count accurately", () => {
     const registry = new RoomRegistry();
     expect(registry.size()).toBe(0);
-    const r1 = Room.create({ requestId: "r4a", ownerOpenId: "o1", roomConfig: { playerCount: 5, roleConfig: "independent" } });
-    const r2 = Room.create({ requestId: "r4b", ownerOpenId: "o2", roomConfig: { playerCount: 5, roleConfig: "independent" } });
+    const r1 = Room.create({ requestId: "r4a", ownerOpenId: "o1", ruleSetCode: RULE_SET, deckTemplateCode: DECK_TMPL });
+    const r2 = Room.create({ requestId: "r4b", ownerOpenId: "o2", ruleSetCode: RULE_SET, deckTemplateCode: DECK_TMPL });
     registry.set(r1.id, r1);
     registry.set(r2.id, r2);
     expect(registry.size()).toBe(2);
@@ -67,8 +56,8 @@ describe("RoomRegistry", () => {
 
   it("roomIds() returns all registered ids", () => {
     const registry = new RoomRegistry();
-    const r1 = Room.create({ requestId: "r5a", ownerOpenId: "o1", roomConfig: { playerCount: 5, roleConfig: "independent" } });
-    const r2 = Room.create({ requestId: "r5b", ownerOpenId: "o2", roomConfig: { playerCount: 5, roleConfig: "independent" } });
+    const r1 = Room.create({ requestId: "r5a", ownerOpenId: "o1", ruleSetCode: RULE_SET, deckTemplateCode: DECK_TMPL });
+    const r2 = Room.create({ requestId: "r5b", ownerOpenId: "o2", ruleSetCode: RULE_SET, deckTemplateCode: DECK_TMPL });
     registry.set(r1.id, r1);
     registry.set(r2.id, r2);
     const ids = registry.roomIds();
@@ -83,11 +72,7 @@ describe("RoomRegistry", () => {
 
   it("getSnapshot() returns a valid snapshot for an existing room", () => {
     const registry = new RoomRegistry();
-    const room = Room.create({
-      requestId: "r6",
-      ownerOpenId: "snap-owner",
-      roomConfig: { playerCount: 5, roleConfig: "independent" },
-    });
+    const room = Room.create({ requestId: "r6", ownerOpenId: "snap-owner", ruleSetCode: RULE_SET, deckTemplateCode: DECK_TMPL });
     registry.set(room.id, room);
     const snap = registry.getSnapshot(room.id);
     expect(snap).toBeDefined();
@@ -96,11 +81,8 @@ describe("RoomRegistry", () => {
   });
 });
 
-// ──────────────────────────────────────────────
-// RoomGateway integration tests
-// ──────────────────────────────────────────────
+// ── RoomGateway integration tests ─────────────────────────────────────────────
 
-/** Helper: create an http server + RoomGateway and return once the server is listening. */
 async function createGateway(): Promise<{
   gateway: RoomGateway;
   client: () => Socket;
@@ -137,7 +119,6 @@ async function createGateway(): Promise<{
   return { gateway, client, cleanup, port };
 }
 
-/** Wait for the next occurrence of a named socket event. */
 function waitForEvent<T>(socket: Socket, event: string): Promise<T> {
   return new Promise((resolve) => {
     socket.once(event, (data: T) => resolve(data));
@@ -162,7 +143,7 @@ describe("RoomGateway", () => {
       type: "COMMAND",
       name: "CreateRoom",
       requestId: "req-create-1",
-      payload: { ownerOpenId: "owner-ws", roomConfig: { playerCount: 5, roleConfig: "independent" } },
+      payload: { ownerOpenId: "owner-ws", ruleSetCode: RULE_SET, deckTemplateCode: DECK_TMPL },
     } as WsMessage);
 
     const msg = await eventPromise;
@@ -183,7 +164,7 @@ describe("RoomGateway", () => {
       type: "COMMAND",
       name: "CreateRoom",
       requestId: "req-create-2",
-      payload: { ownerOpenId: "owner-reg", roomConfig: { playerCount: 5, roleConfig: "independent" } },
+      payload: { ownerOpenId: "owner-reg", ruleSetCode: RULE_SET, deckTemplateCode: DECK_TMPL },
     } as WsMessage);
 
     const msg = await eventPromise;
@@ -196,7 +177,6 @@ describe("RoomGateway", () => {
   it("broadcasts PlayerJoinedRoom after JoinRoom command", async () => {
     const { client, cleanup } = await createGateway();
 
-    // First client creates the room
     const owner = client();
     await new Promise<void>((resolve) => owner.on("connect", resolve).connect());
 
@@ -205,12 +185,11 @@ describe("RoomGateway", () => {
       type: "COMMAND",
       name: "CreateRoom",
       requestId: "req-c3",
-      payload: { ownerOpenId: "owner-join", roomConfig: { playerCount: 5, roleConfig: "independent" } },
+      payload: { ownerOpenId: "owner-join", ruleSetCode: RULE_SET, deckTemplateCode: DECK_TMPL },
     } as WsMessage);
     const createMsg = await createPromise;
     const roomId = (createMsg.payload as Record<string, unknown>).roomId as string;
 
-    // Second client joins the room
     const joiner = client();
     await new Promise<void>((resolve) => joiner.on("connect", resolve).connect());
 
@@ -269,7 +248,7 @@ describe("RoomGateway", () => {
     await cleanup();
   });
 
-  it("all ready players trigger RoleSelectionStarted", async () => {
+  it("StartGame emits CardsDealt and RoleSelectionStarted after 5 players", async () => {
     const { client, cleanup } = await createGateway();
 
     const ownerSocket = client();
@@ -280,7 +259,7 @@ describe("RoomGateway", () => {
       type: "COMMAND",
       name: "CreateRoom",
       requestId: "adv-create",
-      payload: { ownerOpenId: "adv-owner", roomConfig: { playerCount: 5, roleConfig: "independent" } },
+      payload: { ownerOpenId: "adv-owner", ruleSetCode: RULE_SET, deckTemplateCode: DECK_TMPL },
     } as WsMessage);
     const createMsg = await createEvt;
     const roomId = (createMsg.payload as Record<string, unknown>).roomId as string;
@@ -298,32 +277,25 @@ describe("RoomGateway", () => {
       await evt;
     }
 
-    const readyEvt = new Promise<WsMessage>((resolve) => {
+    // Collect multiple events
+    const receivedEvents: string[] = [];
+    const startPromise = new Promise<void>((resolve) => {
       ownerSocket.on("event", (msg: WsMessage) => {
-        if (msg.name === "RoleSelectionStarted") resolve(msg);
+        receivedEvents.push(msg.name);
+        if (receivedEvents.includes("RoleSelectionStarted")) resolve();
       });
     });
 
     ownerSocket.emit("command", {
       type: "COMMAND",
-      name: "SetReady",
-      requestId: "ready-owner",
-      payload: { roomId, openId: "adv-owner", ready: true },
+      name: "StartGame",
+      requestId: "start-game",
+      payload: { roomId, openId: "adv-owner", seed: "test-seed" },
     } as WsMessage);
-    for (let i = 1; i <= 4; i++) {
-      const s = client();
-      await new Promise<void>((resolve) => s.on("connect", resolve).connect());
-      s.emit("command", {
-        type: "COMMAND",
-        name: "SetReady",
-        requestId: `ready-${i}`,
-        payload: { roomId, openId: `adv-p${i}`, ready: true },
-      } as WsMessage);
-    }
 
-    const readyMsg = await readyEvt;
-    expect(readyMsg.name).toBe("RoleSelectionStarted");
-    expect((readyMsg.payload as Record<string, unknown>).currentStage).toBe(Stage.roleSelection);
+    await startPromise;
+    expect(receivedEvents).toContain("CardsDealt");
+    expect(receivedEvents).toContain("RoleSelectionStarted");
 
     await cleanup();
   }, 15000);
