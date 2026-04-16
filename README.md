@@ -5,8 +5,8 @@ DeskGame Backend 是一个基于 TypeScript、Express 和 Socket.IO 的多人桌
 ## 当前能力
 
 - 房间创建、加入、离开与快照查询
-- 房主修改房间配置
-- 玩家准备后自动进入身份选择
+- 房主开局与阶段推进
+- 身份候选确认、押牌与行动分阶段执行
 - 候选身份选择、8 回合环境牌与押牌流程
 - 服务端统一结算、淘汰与投票结果广播
 - HTTP 接口与 WebSocket 指令两套接入方式
@@ -16,24 +16,30 @@ DeskGame Backend 是一个基于 TypeScript、Express 和 Socket.IO 的多人桌
 
 当前实现对齐文档中的新流程：
 
-`lobby -> roleSelection -> bet -> action -> settlement -> discussionVote -> review`
+`preparation -> bet -> environment -> action -> damage -> talk -> vote -> settlement`
+
+平票分支：
+
+`vote -> tieBreak -> vote`
 
 状态含义：
 
-- `lobby`：大厅阶段，配置房间、玩家加入、准备
-- `roleSelection`：服务端发候选身份，玩家确认身份
-- `bet`：玩家提交押牌动作或选择不押牌
-- `action`：回合动作阶段，由房主或超时推进
-- `settlement`：服务端按环境牌和押牌结果统一结算
-- `discussionVote`：存活且有资格的玩家发言、投票
-- `review`：游戏结束，等待复盘或清理
+- `preparation`：准备/发牌阶段，包含候选角色确认
+- `bet`：玩家提交押牌动作
+- `environment`：揭示环境牌
+- `action`：行动阶段执行动作
+- `damage`：伤害结算
+- `talk`：发言阶段
+- `vote`：投票阶段
+- `tieBreak`：平票重投阶段
+- `settlement`：结算淘汰、胜负判定与层数推进
 
 ## 目录
 
 - [src/server](src/server)：HTTP 服务入口与路由
 - [src/gateway](src/gateway)：Socket.IO 网关与消息协议
 - [src/domain](src/domain)：聚合、实体、领域服务、事件与类型
-- [docs/核心业务流程（优化版）.md](docs/%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E6%B5%81%E7%A8%8B%EF%BC%88%E4%BC%98%E5%8C%96%E7%89%88%EF%BC%89.md)：业务流程基准文档
+- [docs/flows/room-flow.zh-CN.md](docs/flows/room-flow.zh-CN.md)：业务流程基准文档
 - [docs/接入文档.md](docs/%E6%8E%A5%E5%85%A5%E6%96%87%E6%A1%A3.md)：HTTP / WebSocket 接入说明
 - [docs/domain/README.md](docs/domain/README.md)：领域模型说明
 
@@ -165,10 +171,10 @@ ADMIN_AUTH_PASSWORD=replace-with-a-strong-password
 - `POST /rooms` 创建房间
 - `POST /rooms/:roomId/players` 加入房间
 - `DELETE /rooms/:roomId/players/:openId` 离开房间
-- `POST /rooms/:roomId/config` 更新房间配置
-- `POST /rooms/:roomId/ready` 设置准备状态
+- `POST /rooms/:roomId/start` 开始游戏
 - `POST /rooms/:roomId/role-selection` 确认身份选择
-- `POST /rooms/:roomId/bets` 提交押牌
+- `POST /rooms/:roomId/actions` 提交押牌/行动
+- `POST /rooms/:roomId/environment/reveal` 揭示环境牌
 - `POST /rooms/:roomId/votes` 提交投票
 - `POST /rooms/:roomId/stage/advance` 推进阶段
 - `GET /rooms/:roomId` 获取房间快照
@@ -188,10 +194,8 @@ curl -X POST http://localhost:3000/rooms \
   -H 'Content-Type: application/json' \
   -d '{
     "ownerOpenId": "owner-001",
-    "roomConfig": {
-      "playerCount": 5,
-      "roleConfig": "independent"
-    },
+    "ruleSetCode": "classic-5p",
+    "deckTemplateCode": "default-8-floor",
     "requestId": "req-create-room"
   }'
 ```
@@ -215,15 +219,14 @@ curl -X POST http://localhost:3000/rooms/<roomId>/players \
   }'
 ```
 
-设置 ready：
+房主开始游戏：
 
 ```bash
-curl -X POST http://localhost:3000/rooms/<roomId>/ready \
+curl -X POST http://localhost:3000/rooms/<roomId>/start \
   -H 'Content-Type: application/json' \
   -d '{
-    "openId": "player-002",
-    "ready": true,
-    "requestId": "req-ready"
+    "openId": "owner-001",
+    "requestId": "req-start"
   }'
 ```
 
@@ -241,10 +244,8 @@ socket.on("connect", () => {
     requestId: "req-create-room",
     payload: {
       ownerOpenId: "owner-001",
-      roomConfig: {
-        playerCount: 5,
-        roleConfig: "independent",
-      },
+      ruleSetCode: "classic-5p",
+      deckTemplateCode: "default-8-floor",
     },
   });
 });
@@ -260,177 +261,18 @@ socket.on("error", (message) => {
 
 ### 使用 Socket.IO 跑一条最小完整流程
 
-下面这个示例会启动 5 个客户端连接，按顺序完成：
+推荐按以下顺序联调：
 
-1. 房主创建房间
-2. 4 名玩家加入
-3. 5 人全部 ready
-4. 根据 `RoleSelectionStarted` 中的候选身份确认角色
-5. 全员提交押牌
-6. 房主连续推进到 `discussionVote`
+1. `CreateRoom` / `JoinRoom`
+2. `StartGame`
+3. 所有玩家 `ConfirmRoleSelection`
+4. `SubmitAction`（bet 阶段押牌）
+5. `AdvanceStage` 到 `environment` 并 `RevealEnvironment`
+6. `SubmitAction`（action 阶段行动）
+7. `AdvanceStage` 进入 `damage -> talk -> vote -> settlement`
+8. `SubmitVote`（必要时进入 `tieBreak` 后重投）
 
-```ts
-import { io, Socket } from "socket.io-client";
-
-type CommandMessage = {
-  type: "COMMAND";
-  name: string;
-  requestId: string;
-  payload: Record<string, unknown>;
-};
-
-type EventMessage = {
-  type: "EVENT";
-  name: string;
-  roomId?: string;
-  payload: any;
-};
-
-const BASE_URL = "http://localhost:3000";
-const players = ["owner-001", "player-001", "player-002", "player-003", "player-004"];
-const sockets = new Map<string, Socket>();
-
-let roomId = "";
-const eventLog: EventMessage[] = [];
-
-function connectPlayer(openId: string): Promise<Socket> {
-  return new Promise((resolve) => {
-    const socket = io(BASE_URL, { autoConnect: false });
-    sockets.set(openId, socket);
-    socket.on("connect", () => resolve(socket));
-    socket.on("event", (message: EventMessage) => {
-      eventLog.push(message);
-      console.log(openId, "<= EVENT", message.name, message.payload);
-
-      if (message.name === "RoomCreated") {
-        roomId = message.payload.roomId;
-      }
-    });
-    socket.on("error", (message) => {
-      console.error(openId, "<= ERROR", message.payload);
-    });
-    socket.connect();
-  });
-}
-
-function send(openId: string, message: CommandMessage) {
-  sockets.get(openId)?.emit("command", message);
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForEvent(name: string, predicate?: (message: EventMessage) => boolean): Promise<EventMessage> {
-  for (;;) {
-    const found = eventLog.find((item) => item.name === name && (predicate ? predicate(item) : true));
-    if (found) {
-      return found;
-    }
-    await sleep(50);
-  }
-}
-
-async function main() {
-  for (const openId of players) {
-    await connectPlayer(openId);
-  }
-
-  send("owner-001", {
-    type: "COMMAND",
-    name: "CreateRoom",
-    requestId: "create-room",
-    payload: {
-      ownerOpenId: "owner-001",
-      roomConfig: { playerCount: 5, roleConfig: "independent" },
-    },
-  });
-
-  await waitForEvent("RoomCreated");
-
-  for (const openId of players.slice(1)) {
-    send(openId, {
-      type: "COMMAND",
-      name: "JoinRoom",
-      requestId: `join-${openId}`,
-      payload: { roomId, openId, nickname: openId, avatar: "" },
-    });
-  }
-
-  while (eventLog.filter((item) => item.name === "PlayerJoinedRoom").length < 4) {
-    await sleep(50);
-  }
-
-  for (const openId of players) {
-    send(openId, {
-      type: "COMMAND",
-      name: "SetReady",
-      requestId: `ready-${openId}`,
-      payload: { roomId, openId, ready: true },
-    });
-  }
-
-  const roleSelectionStarted = await waitForEvent("RoleSelectionStarted");
-  for (const item of roleSelectionStarted.payload.candidateRoles as Array<{ openId: string; roles: string[] }>) {
-    send(item.openId, {
-      type: "COMMAND",
-      name: "ConfirmRoleSelection",
-      requestId: `select-${item.openId}`,
-      payload: { roomId, openId: item.openId, roleId: item.roles[0] },
-    });
-  }
-
-  await waitForEvent("RoleSelectionCompleted");
-
-  for (const openId of players) {
-    send(openId, {
-      type: "COMMAND",
-      name: "SubmitBet",
-      requestId: `bet-${openId}`,
-      payload: { roomId, openId, actionCard: "listen" },
-    });
-  }
-
-  while (eventLog.filter((item) => item.name === "BetSubmitted").length < 5) {
-    await sleep(50);
-  }
-
-  send("owner-001", {
-    type: "COMMAND",
-    name: "AdvanceStage",
-    requestId: "advance-bet-to-action",
-    payload: { roomId, openId: "owner-001" },
-  });
-
-  await waitForEvent("EnvironmentRevealed");
-
-  send("owner-001", {
-    type: "COMMAND",
-    name: "AdvanceStage",
-    requestId: "advance-action-to-settlement",
-    payload: { roomId, openId: "owner-001" },
-  });
-
-  await waitForEvent("RoundSettled");
-
-  send("owner-001", {
-    type: "COMMAND",
-    name: "AdvanceStage",
-    requestId: "advance-settlement-to-discussionVote",
-    payload: { roomId, openId: "owner-001" },
-  });
-
-  await waitForEvent(
-    "StageAdvanced",
-    (message) => message.payload.currentStage === "discussionVote"
-  );
-  console.log("Reached discussionVote stage for room", roomId);
-}
-
-main().catch(console.error);
-```
-
-更稳定的按步骤联调方式见 [docs/api-smoke.md](docs/api-smoke.md)。
+完整字段与示例请参考 [docs/接入文档.md](docs/%E6%8E%A5%E5%85%A5%E6%96%87%E6%A1%A3.md)。
 
 建议联调时至少监听这些事件：
 
