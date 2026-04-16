@@ -4,30 +4,30 @@
 
 ## DealService
 
-- 输入：players、roomConfig、seed
-- 输出：openId 与 3 张候选角色的映射
-- 说明：基于 seed 的确定性洗牌，玩家顺序必须稳定，且身份配比需符合房间人数规则。
+- 输入：players、identityDistribution、rolePool、seed
+- 输出：MatchPlayer 初始身份、角色候选、初始手牌与待确认角色状态
+- 说明：基于 seed 的确定性洗牌，玩家顺序必须稳定。
 
 ## EnvironmentDeckService
 
-- 输入：envConfig、seed
-- 输出：8 张环境牌序列
-- 说明：从 9 张中选 8 张，结果可复验。
+- 输入：deckTemplate、seed
+- 输出：MatchEnvironmentDeck 的 8 层环境牌序列
+- 说明：从模板牌池中生成可复验序列，并保留被移除/未揭示信息。
 
 ## StageFlowService
 
-- 输入：currentStage、currentRound、allReady、allRolesSelected、allBetsSubmitted、allVotesSubmitted、winnerState
+- 输入：currentStage、timeoutFlag、ownerCommand、roundState、roleSelectionState
 - 输出：nextStage
-- 说明：单向推进；lobby -> roleSelection -> bet -> action -> settlement -> discussionVote -> review。
+- 说明：主路径单向推进；preparation -> bet -> environment -> action -> damage -> talk -> vote -> settlement。preparation 需等待全部玩家确认角色。若 vote 平票，则进入 tieBreak 后回到 vote，且 currentVoteRound + 1。
 
 ## SettlementService
 
-- 输入：environmentCard、betSubmissions、actionTargets、players
-- 输出：damages、heals、votePowerChanges、eliminated、actionLogs
-- 说明：先结算环境基础伤害，再处理行动牌效果、不押牌惩罚与免疫规则。
+- 输入：round、environmentCard、按 sequence 排序的 actionSubmissions、players
+- 输出：damages、identityReveals、playerStateChanges、eliminated 列表
+- 说明：在 damage 阶段先处理免疫/不可防御规则，再更新血量、禁言/禁投等状态，并生成回合快照。
 
 ## WinnerJudgementService
 
-- 输入：按角色统计的存活玩家、currentRound、allEliminated
+- 输入：按身份统计的存活玩家、currentFloor、resolvedGasRounds
 - 输出：winnerCamp、reason、isFinal
-- 说明：每次结算与投票后评估胜负，第 8 回合结束后进行最终判定。
+- 说明：在 settlement 阶段评估胜负；第 8 层结束和 4 轮有屁回合都属于终局条件。活跃人数为 0 时按规则判定为屁者获胜。

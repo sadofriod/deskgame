@@ -25,10 +25,8 @@
   "requestId": "uuid",
   "payload": {
     "ownerOpenId": "String",
-    "roomConfig": {
-      "playerCount": 5,
-      "roleConfig": "independent"
-    }
+    "ruleSetCode": "String",
+    "deckTemplateCode": "String"
   }
 }
 ```
@@ -48,33 +46,16 @@
 }
 ```
 
-### UpdateRoomConfig
+### StartGame
 
 ```json
 {
-  "name": "UpdateRoomConfig",
+  "name": "StartGame",
   "requestId": "uuid",
   "payload": {
     "roomId": "String",
     "openId": "String",
-    "roomConfig": {
-      "playerCount": 8,
-      "roleConfig": "faction"
-    }
-  }
-}
-```
-
-### SetReady
-
-```json
-{
-  "name": "SetReady",
-  "requestId": "uuid",
-  "payload": {
-    "roomId": "String",
-    "openId": "String",
-    "ready": true
+    "seed": "String"
   }
 }
 ```
@@ -88,22 +69,21 @@
   "payload": {
     "roomId": "String",
     "openId": "String",
-    "roleId": "String"
+    "roleCode": "String"
   }
 }
 ```
 
-### SubmitBet
+### SubmitAction
 
 ```json
 {
-  "name": "SubmitBet",
+  "name": "SubmitAction",
   "requestId": "uuid",
   "payload": {
     "roomId": "String",
     "openId": "String",
-    "actionCard": "String",
-    "passedBet": false
+    "cardInstanceId": "String"
   }
 }
 ```
@@ -117,7 +97,9 @@
   "payload": {
     "roomId": "String",
     "openId": "String",
-    "voteTarget": "String"
+    "voteRound": 1,
+    "voteTarget": "String|null",
+    "votePowerAtSubmit": 1
   }
 }
 ```
@@ -131,7 +113,7 @@
   "payload": {
     "roomId": "String",
     "openId": "String",
-    "timeoutFlag": false
+    "trigger": "ownerCommand|timeout"
   }
 }
 ```
@@ -145,11 +127,10 @@
   "name": "RoomCreated",
   "payload": {
     "roomId": "String",
-    "roomCode": "123456",
     "ownerOpenId": "String",
     "gameState": "wait",
-    "currentRound": 0,
-    "currentStage": "lobby",
+    "currentFloor": 1,
+    "currentStage": "preparation",
     "version": 1
   }
 }
@@ -163,43 +144,41 @@
   "payload": {
     "roomId": "String",
     "openId": "String",
-    "seatNo": 1,
     "playerCount": 1,
     "version": 2
   }
 }
 ```
 
-### RoomConfigUpdated
+### CardsDealt
 
 ```json
 {
-  "name": "RoomConfigUpdated",
+  "name": "CardsDealt",
   "payload": {
     "roomId": "String",
-    "roomConfig": {
-      "playerCount": 8,
-      "roleConfig": "faction"
-    },
-    "version": 3
+    "matchId": "String",
+    "currentFloor": 1,
+    "currentStage": "preparation",
+    "players": [
+      {
+        "openId": "String",
+        "identityCode": "String",
+        "roleOptions": ["String", "String"],
+        "initialHandCards": [
+          {
+            "cardInstanceId": "String",
+            "actionCardCode": "String"
+          }
+        ]
+      }
+    ],
+    "version": 10
   }
 }
 ```
 
-### PlayerReadyStateChanged
-
-```json
-{
-  "name": "PlayerReadyStateChanged",
-  "payload": {
-    "roomId": "String",
-    "openId": "String",
-    "ready": true,
-    "allReady": false,
-    "version": 4
-  }
-}
-```
+> Gateway 向客户端推送时必须做私有投递与脱敏，身份牌、手牌和环境顺序只发送给有权限的玩家。
 
 ### RoleSelectionStarted
 
@@ -208,11 +187,23 @@
   "name": "RoleSelectionStarted",
   "payload": {
     "roomId": "String",
-    "candidateRoles": [
-      {"openId": "String", "roles": ["String", "String", "String"]}
-    ],
-    "currentStage": "roleSelection",
+    "matchId": "String",
+    "pendingPlayers": ["openId"],
     "version": 10
+  }
+}
+```
+
+### RoleSelected
+
+```json
+{
+  "name": "RoleSelected",
+  "payload": {
+    "roomId": "String",
+    "openId": "String",
+    "roleCode": "String",
+    "version": 11
   }
 }
 ```
@@ -224,25 +215,41 @@
   "name": "RoleSelectionCompleted",
   "payload": {
     "roomId": "String",
-    "currentRound": 1,
-    "currentStage": "bet",
-    "envDeck": ["EnvironmentCard"],
+    "matchId": "String",
+    "currentFloor": 1,
+    "currentStage": "preparation",
+    "version": 12
+  }
+}
+```
+
+### ActionSubmitted
+
+```json
+{
+  "name": "ActionSubmitted",
+  "payload": {
+    "roomId": "String",
+    "floor": 1,
+    "openId": "String",
+    "sequence": 1,
+    "sourceStage": "bet",
     "version": 11
   }
 }
 ```
 
-### BetSubmitted
+### StageAdvanced
 
 ```json
 {
-  "name": "BetSubmitted",
+  "name": "StageAdvanced",
   "payload": {
     "roomId": "String",
-    "round": 1,
-    "openId": "String",
-    "passedBet": false,
-    "selectedAction": "scold",
+    "currentFloor": 1,
+    "fromStage": "bet",
+    "toStage": "environment",
+    "currentVoteRound": 1,
     "version": 12
   }
 }
@@ -255,8 +262,9 @@
   "name": "EnvironmentRevealed",
   "payload": {
     "roomId": "String",
-    "round": 1,
+    "floor": 1,
     "environmentCard": "EnvironmentCard",
+    "roundKind": "gas",
     "version": 13
   }
 }
@@ -269,10 +277,10 @@
   "name": "RoundSettled",
   "payload": {
     "roomId": "String",
-    "round": 1,
+    "floor": 1,
+    "stage": "damage",
     "settlementResult": {
       "damages": [{"openId": "String", "damage": 1, "reason": "String"}],
-      "heals": [{"openId": "String", "heal": 1, "reason": "String"}],
       "eliminated": ["String"]
     },
     "version": 14
@@ -287,10 +295,10 @@
   "name": "VoteSubmitted",
   "payload": {
     "roomId": "String",
-    "round": 1,
+    "floor": 1,
+    "voteRound": 1,
     "openId": "String",
-    "voteTarget": "String",
-    "votePowerAtSubmit": 1.5,
+    "votePowerAtSubmit": 1,
     "version": 15
   }
 }
@@ -303,14 +311,15 @@
   "name": "VoteResolved",
   "payload": {
     "roomId": "String",
-    "round": 1,
+    "floor": 1,
+    "voteRound": 1,
     "voteResult": {
-      "targetOpenId": "String",
+      "targetOpenId": "String|null",
       "votes": 2.5,
       "isTie": false,
-      "tieTargets": [],
-      "needRevote": false
+      "tieTargets": []
     },
+    "nextStage": "preparation",
     "version": 16
   }
 }
@@ -338,10 +347,8 @@
 ```json
 {
   "players": ["openId"],
-  "roomConfig": {
-    "playerCount": 8,
-    "roleConfig": "extended"
-  },
+  "ruleSetCode": "String",
+  "playerCount": 8,
   "seed": "String"
 }
 ```
@@ -350,13 +357,8 @@
 
 ```json
 {
-  "envConfig": {
-    "hasGas": 3,
-    "hasStink": 1,
-    "hasStew": 0,
-    "none": 4,
-    "pick": 8
-  },
+  "ruleSetCode": "String",
+  "deckTemplateCode": "String",
   "seed": "String"
 }
 ```
@@ -365,9 +367,22 @@
 
 ```json
 {
+  "round": {
+    "matchId": "String",
+    "floor": 1,
+    "stage": "damage",
+    "currentVoteRound": 1
+  },
   "environmentCard": "EnvironmentCard",
-  "betSubmissions": [{"openId": "String", "selectedAction": "String", "passedBet": false}],
-  "actionTargets": [{"openId": "String", "targetOpenIds": ["String"]}],
+  "actionSubmissions": [
+    {
+      "sequence": 1,
+      "openId": "String",
+      "cardInstanceId": "String",
+      "actionCard": "String",
+      "sourceStage": "bet"
+    }
+  ],
   "players": [{"openId": "String", "hp": 4, "isAlive": true}]
 }
 ```
@@ -376,11 +391,11 @@
 
 ```json
 {
-  "aliveByRole": {
+  "aliveByCamp": {
     "passenger": 3,
     "fatter": 1
   },
-  "currentRound": 4,
-  "allEliminated": false
+  "currentFloor": 4,
+  "resolvedGasRounds": 2
 }
 ```
