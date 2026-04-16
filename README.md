@@ -173,7 +173,7 @@ ADMIN_AUTH_PASSWORD=replace-with-a-strong-password
 - `DELETE /rooms/:roomId/players/:openId` 离开房间
 - `POST /rooms/:roomId/start` 开始游戏
 - `POST /rooms/:roomId/role-selection` 确认身份选择
-- `POST /rooms/:roomId/actions` 提交押牌/行动
+- `POST /rooms/:roomId/actions` 提交押牌（仅 bet 阶段）
 - `POST /rooms/:roomId/environment/reveal` 揭示环境牌
 - `POST /rooms/:roomId/votes` 提交投票
 - `POST /rooms/:roomId/stage/advance` 推进阶段
@@ -268,9 +268,9 @@ socket.on("error", (message) => {
 3. 所有玩家 `ConfirmRoleSelection`
 4. `SubmitAction`（bet 阶段押牌）
 5. `AdvanceStage` 到 `environment` 并 `RevealEnvironment`
-6. `SubmitAction`（action 阶段行动）
-7. `AdvanceStage` 进入 `damage -> talk -> vote -> settlement`
-8. `SubmitVote`（必要时进入 `tieBreak` 后重投）
+6. 多次调用 `AdvanceStage`，依次推进到 `damage`、`talk`、`vote`（`action` 阶段由服务端执行，不需要再次 `SubmitAction`）
+7. 在 `vote` 阶段执行 `SubmitVote`
+8. 如有必要，再调用 `AdvanceStage` 进入 `tieBreak` 后重投，并继续推进到 `settlement`
 
 完整字段与示例请参考 [docs/接入文档.md](docs/%E6%8E%A5%E5%85%A5%E6%96%87%E6%A1%A3.md)。
 
