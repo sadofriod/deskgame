@@ -206,10 +206,11 @@ export class RoomGateway {
   }
 
   private handleRevealEnvironment(socketId: string, msg: WsMessage): void {
-    const p = msg.payload as unknown as { roomId: string };
+    const p = msg.payload as unknown as { roomId: string; openId: string };
     if (!p.roomId) throw new Error("roomId is required");
+    if (!p.openId) throw new Error("openId is required");
     const room = this.requireRoom(p.roomId);
-    room.revealEnvironment({ requestId: msg.requestId ?? socketId, roomId: p.roomId });
+    room.revealEnvironment({ requestId: msg.requestId ?? socketId, roomId: p.roomId, ownerOpenId: p.openId });
     this.broadcastEvents(room);
   }
 
@@ -234,13 +235,15 @@ export class RoomGateway {
   private handleAdvanceStage(socketId: string, msg: WsMessage): void {
     const p = msg.payload as unknown as AdvanceStagePayload;
     if (!p.roomId) throw new Error("roomId is required");
+    if (!p.openId) throw new Error("openId is required");
     const room = this.requireRoom(p.roomId);
 
+    // Clients may only issue owner commands — timeout advances are server-only.
     room.advanceStage({
       requestId: msg.requestId ?? socketId,
       roomId: p.roomId,
       openId: p.openId,
-      trigger: p.trigger,
+      trigger: "ownerCommand",
     });
 
     this.broadcastEvents(room);

@@ -245,6 +245,11 @@ async function buildAdminOverview(roomRepository: RoomRepository) {
       if (!existing.roomIds.includes(room.roomId)) existing.roomIds.push(room.roomId);
       if (!existing.roomCodes.includes(room.roomId)) existing.roomCodes.push(room.roomId);
       existing.isReady = existing.isReady || player.isReady;
+      existing.isAlive = existing.isAlive || isAlive;
+      const joinedAt = player.joinedAt ?? new Date();
+      if (joinedAt.getTime() > existing.lastJoinTime.getTime()) {
+        existing.lastJoinTime = joinedAt;
+      }
     }
   }
 
@@ -473,9 +478,9 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   app.post("/rooms/:roomId/environment/reveal", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const { requestId = uuidv4() } = (req.body ?? {}) as { requestId?: string };
+      const { openId, requestId = uuidv4() } = (req.body ?? {}) as { openId?: string; requestId?: string };
       const room = await loadRoom(roomId);
-      room.revealEnvironment({ requestId, roomId });
+      room.revealEnvironment({ requestId, roomId, ownerOpenId: openId });
       await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {
@@ -503,16 +508,16 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   });
 
   // ── POST /rooms/:roomId/stage/advance ────────
+  // trigger is always "ownerCommand" from the HTTP API; timeout advances are server-only.
   app.post("/rooms/:roomId/stage/advance", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const { openId, trigger, requestId = uuidv4() } = req.body as {
+      const { openId, requestId = uuidv4() } = req.body as {
         openId?: string;
-        trigger?: "ownerCommand" | "timeout";
         requestId?: string;
       };
       const room = await loadRoom(roomId);
-      room.advanceStage({ requestId, roomId, openId, trigger });
+      room.advanceStage({ requestId, roomId, openId, trigger: "ownerCommand" });
       await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {

@@ -60,8 +60,16 @@ function shuffle<T>(arr: T[], rng: () => number): T[] {
 
 export class DealService {
   deal(input: DealServiceInput): IdentityAssignment[] {
+    if (input.players.length !== input.playerCount) {
+      throw new Error(
+        `players.length (${input.players.length}) must equal playerCount (${input.playerCount})`
+      );
+    }
+    if (input.playerCount < 5 || input.playerCount > 10) {
+      throw new Error(`playerCount must be 5–10, got ${input.playerCount}`);
+    }
     const rng = seededRng(input.seed);
-    const dist = IDENTITY_DISTRIBUTION[input.playerCount] ?? { passenger: 3, fatter: 2 };
+    const dist = IDENTITY_DISTRIBUTION[input.playerCount]!;
 
     // Build identity array; total must match player count
     const identities: string[] = [

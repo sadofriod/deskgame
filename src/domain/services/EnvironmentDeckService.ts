@@ -38,7 +38,17 @@ function shuffle<T>(arr: T[], rng: () => number): T[] {
 
 export class EnvironmentDeckService {
   generate(input: DeckInput): DeckEntry[] {
-    const rng = seededRng(input.seed);
+    const { ruleSetCode, deckTemplateCode, seed } = input;
+
+    // Validate supported rule set / deck template combination
+    if (ruleSetCode !== "classic_v1" || deckTemplateCode !== "classic_pool_v1") {
+      throw new Error(
+        `Unsupported ruleSetCode/deckTemplateCode: ${ruleSetCode}/${deckTemplateCode}. ` +
+        `Only classic_v1/classic_pool_v1 is supported.`
+      );
+    }
+
+    const rng = seededRng(seed);
 
     // classic_pool_v1: gas×3, no_gas×4, smelly_gas×1, stuffy_gas×1 = 9 cards
     const pool: string[] = [

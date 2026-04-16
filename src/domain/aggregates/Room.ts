@@ -84,6 +84,7 @@ export interface SubmitActionCommand {
 export interface RevealEnvironmentCommand {
   requestId: string;
   roomId: string;
+  ownerOpenId?: string;
 }
 
 export interface SubmitVoteCommand {
@@ -502,6 +503,8 @@ export class Room {
   revealEnvironment(cmd: RevealEnvironmentCommand): void {
     if (this.processedRequests.has(cmd.requestId)) return;
     if (this.currentStage !== Stage.environment) throw new Error("Not in environment stage");
+    if (cmd.ownerOpenId !== undefined && cmd.ownerOpenId !== this.ownerOpenId)
+      throw new Error("Only owner can reveal environment");
 
     const deckEntry = this.deck.find((d) => d.position === this.currentFloor);
     if (!deckEntry) throw new Error(`No deck entry at position ${this.currentFloor}`);
