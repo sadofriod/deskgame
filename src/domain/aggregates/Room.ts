@@ -201,7 +201,7 @@ export class Room {
     room.playerCount = 1;
     room.version = 1;
     room.roomPlayers = [
-      { openId: cmd.ownerOpenId, seatNo: 1, nickname: cmd.ownerOpenId, avatar: "", isReady: false },
+      { openId: cmd.ownerOpenId, seatNo: 1, nickname: cmd.ownerOpenId, avatar: "", isReady: false, joinedAt: new Date() },
     ];
 
     room._events.push({
@@ -229,7 +229,10 @@ export class Room {
     room.currentStage = snap.currentStage;
     room.currentMatchId = snap.currentMatchId;
     room.version = snap.version;
-    room.roomPlayers = snap.roomPlayers;
+    room.roomPlayers = snap.roomPlayers.map((p) => ({
+      ...p,
+      joinedAt: p.joinedAt ?? new Date(),
+    }));
 
     if (snap.match) {
       for (const ps of snap.match.players) {
@@ -291,7 +294,7 @@ export class Room {
       throw new Error(`Player ${cmd.openId} already in room`);
 
     const seatNo = this.playerCount + 1;
-    this.roomPlayers.push({ openId: cmd.openId, seatNo, nickname: cmd.nickname, avatar: cmd.avatar, isReady: false });
+    this.roomPlayers.push({ openId: cmd.openId, seatNo, nickname: cmd.nickname, avatar: cmd.avatar, isReady: false, joinedAt: new Date() });
     this.playerCount++;
     this.version++;
     this.processedRequests.add(cmd.requestId);

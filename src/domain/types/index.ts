@@ -107,6 +107,7 @@ export interface RoomPlayerState {
   nickname: string;
   avatar: string;
   isReady: boolean;
+  joinedAt: Date;
 }
 
 export interface DeckEntry {

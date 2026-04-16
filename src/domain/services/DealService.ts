@@ -27,11 +27,14 @@ const ROLE_POOL = [
 
 const CARD_POOL = ["endure", "scold", "blow", "suck", "grab", "listen"];
 
+const SEED_MAX_LEN = 256;
+
 function seededRng(seed: string): () => number {
-  const safeSeed = String(seed).slice(0, 256); // bound user input
+  const safeSeed = String(seed).slice(0, SEED_MAX_LEN);
   let h = 0;
-  for (let i = 0; i < safeSeed.length; i++) {
-    h = (Math.imul(31, h) + safeSeed.charCodeAt(i)) | 0;
+  for (let i = 0; i < SEED_MAX_LEN; i++) {
+    // Use 0 for positions beyond the actual seed length (constant loop bound)
+    h = (Math.imul(31, h) + (i < safeSeed.length ? safeSeed.charCodeAt(i) : 0)) | 0;
   }
   let state = h >>> 0;
   return () => {
@@ -47,7 +50,10 @@ function shuffle<T>(arr: T[], rng: () => number): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
-    [a[i], a[j]] = [a[j]!, a[i]!];
+    // Both i and j are valid indices since j < i + 1 <= a.length
+    const tmp = a[i] as T;
+    a[i] = a[j] as T;
+    a[j] = tmp;
   }
   return a;
 }
@@ -57,27 +63,31 @@ export class DealService {
     const rng = seededRng(input.seed);
     const dist = IDENTITY_DISTRIBUTION[input.playerCount] ?? { passenger: 3, fatter: 2 };
 
-    // Build identity array
+    // Build identity array; total must match player count
     const identities: string[] = [
       ...Array(dist.passenger).fill("passenger"),
       ...Array(dist.fatter).fill("fatter"),
     ];
     const shuffledIdentities = shuffle(identities, rng);
 
-    // Shuffle card pool for initial hand distribution
+    // Shuffle card pool for initial hand distribution (cycles if more players than card types)
     const shuffledCards = shuffle([...CARD_POOL], rng);
+    const cardCount = shuffledCards.length;
 
     return input.players.map((openId, index) => {
       // Each player gets 2 unique roles drawn from the pool
       const shuffledRoles = shuffle([...ROLE_POOL], rng);
+      // Use index directly — shuffledIdentities.length equals input.players.length for valid player counts
+      const identityCode = shuffledIdentities[index] ?? "passenger";
       return {
         openId,
-        identityCode: shuffledIdentities[index % shuffledIdentities.length] ?? "passenger",
+        identityCode,
         roleOptions: [shuffledRoles[0]!, shuffledRoles[1]!],
         initialHandCards: [
           {
             cardInstanceId: `${openId}-card-0`,
-            actionCardCode: shuffledCards[index % shuffledCards.length] ?? "listen",
+            // Cycle through card pool so every player always gets a card
+            actionCardCode: shuffledCards[index % cardCount] ?? "listen",
           },
         ],
       };

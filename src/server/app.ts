@@ -215,7 +215,18 @@ async function buildAdminOverview(roomRepository: RoomRepository) {
   const users = new Map<string, InternalAdminOverviewUser>();
 
   for (const room of activeRooms) {
+    // Build a lookup of match-level alive state (if game is running)
+    const matchAliveMap = new Map<string, boolean>();
+    if (room.match) {
+      for (const mp of room.match.players) {
+        matchAliveMap.set(mp.openId, mp.isAlive);
+      }
+    }
+
     for (const player of room.roomPlayers) {
+      const isAlive = matchAliveMap.has(player.openId)
+        ? (matchAliveMap.get(player.openId) ?? true)
+        : true;
       const existing = users.get(player.openId);
       if (!existing) {
         users.set(player.openId, {
@@ -223,10 +234,10 @@ async function buildAdminOverview(roomRepository: RoomRepository) {
           nickname: player.nickname,
           avatar: player.avatar,
           isReady: player.isReady,
-          isAlive: true,
+          isAlive,
           roomIds: [room.roomId],
           roomCodes: [room.roomId],
-          lastJoinTime: new Date(),
+          lastJoinTime: player.joinedAt ?? new Date(),
         });
         continue;
       }
@@ -249,23 +260,33 @@ async function buildAdminOverview(roomRepository: RoomRepository) {
         ...user,
         lastJoinTime: user.lastJoinTime.toISOString(),
       })),
-    rooms: activeRooms.map((room: RoomSnapshot): AdminOverviewRoom => ({
-      roomId: room.roomId,
-      roomCode: room.roomId,
-      ownerOpenId: room.ownerOpenId,
-      gameState: room.gameState,
-      currentStage: room.currentStage,
-      playerCount: room.playerCount,
-      configuredPlayerCount: room.playerCount,
-      players: room.roomPlayers.map((player) => ({
-        openId: player.openId,
-        nickname: player.nickname,
-        avatar: player.avatar,
-        isReady: player.isReady,
-        isAlive: true,
-        joinTime: new Date().toISOString(),
-      })),
-    })),
+    rooms: activeRooms.map((room: RoomSnapshot): AdminOverviewRoom => {
+      const matchAliveMap = new Map<string, boolean>();
+      if (room.match) {
+        for (const mp of room.match.players) {
+          matchAliveMap.set(mp.openId, mp.isAlive);
+        }
+      }
+      return {
+        roomId: room.roomId,
+        roomCode: room.roomId,
+        ownerOpenId: room.ownerOpenId,
+        gameState: room.gameState,
+        currentStage: room.currentStage,
+        playerCount: room.playerCount,
+        configuredPlayerCount: room.playerCount,
+        players: room.roomPlayers.map((player) => ({
+          openId: player.openId,
+          nickname: player.nickname,
+          avatar: player.avatar,
+          isReady: player.isReady,
+          isAlive: matchAliveMap.has(player.openId)
+            ? (matchAliveMap.get(player.openId) ?? true)
+            : true,
+          joinTime: (player.joinedAt ?? new Date()).toISOString(),
+        })),
+      };
+    }),
     apiDocsMarkdown: API_DOCS_MARKDOWN,
     generatedAt: new Date().toISOString(),
   };

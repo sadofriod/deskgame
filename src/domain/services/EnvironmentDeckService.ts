@@ -8,11 +8,14 @@ export interface DeckInput {
 
 // DeckEntry is re-exported from domain types
 
+const SEED_MAX_LEN = 256;
+
 function seededRng(seed: string): () => number {
-  const safeSeed = String(seed).slice(0, 256); // bound user input
+  const safeSeed = String(seed).slice(0, SEED_MAX_LEN);
   let h = 0;
-  for (let i = 0; i < safeSeed.length; i++) {
-    h = (Math.imul(31, h) + safeSeed.charCodeAt(i)) | 0;
+  for (let i = 0; i < SEED_MAX_LEN; i++) {
+    // Use 0 for positions beyond the actual seed length (constant loop bound)
+    h = (Math.imul(31, h) + (i < safeSeed.length ? safeSeed.charCodeAt(i) : 0)) | 0;
   }
   let state = h >>> 0;
   return () => {
