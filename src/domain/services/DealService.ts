@@ -28,9 +28,10 @@ const ROLE_POOL = [
 const CARD_POOL = ["endure", "scold", "blow", "suck", "grab", "listen"];
 
 function seededRng(seed: string): () => number {
+  const safeSeed = String(seed).slice(0, 256); // bound user input
   let h = 0;
-  for (let i = 0; i < seed.length; i++) {
-    h = (Math.imul(31, h) + seed.charCodeAt(i)) | 0;
+  for (let i = 0; i < safeSeed.length; i++) {
+    h = (Math.imul(31, h) + safeSeed.charCodeAt(i)) | 0;
   }
   let state = h >>> 0;
   return () => {

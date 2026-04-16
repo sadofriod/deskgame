@@ -9,9 +9,10 @@ export interface DeckInput {
 // DeckEntry is re-exported from domain types
 
 function seededRng(seed: string): () => number {
+  const safeSeed = String(seed).slice(0, 256); // bound user input
   let h = 0;
-  for (let i = 0; i < seed.length; i++) {
-    h = (Math.imul(31, h) + seed.charCodeAt(i)) | 0;
+  for (let i = 0; i < safeSeed.length; i++) {
+    h = (Math.imul(31, h) + safeSeed.charCodeAt(i)) | 0;
   }
   let state = h >>> 0;
   return () => {
@@ -46,7 +47,7 @@ export class EnvironmentDeckService {
 
     // Remove 1 optional card (smelly_gas or stuffy_gas) randomly
     const optionals = ["smelly_gas", "stuffy_gas"];
-    const removeCard = optionals[Math.floor(rng() * 2)]!;
+    const removeCard = optionals[Math.floor(rng() * optionals.length)]!;
     const removeIdx = pool.indexOf(removeCard);
     if (removeIdx >= 0) pool.splice(removeIdx, 1);
 
