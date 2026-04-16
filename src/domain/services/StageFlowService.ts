@@ -1,35 +1,46 @@
 import { Stage } from "../types";
 
 export interface StageFlowInput {
-  current: Stage;
+  currentStage: Stage;
+  isTieVote?: boolean;
   isFinal?: boolean;
 }
 
 export class StageFlowService {
   next(input: StageFlowInput): Stage {
-    if (input.current === Stage.discussionVote) {
-      return input.isFinal ? Stage.review : Stage.bet;
-    }
+    const { currentStage, isTieVote, isFinal } = input;
 
-    switch (input.current) {
-      case Stage.lobby:
-        return Stage.roleSelection;
-      case Stage.roleSelection:
+    switch (currentStage) {
+      case Stage.preparation:
         return Stage.bet;
       case Stage.bet:
+        return Stage.environment;
+      case Stage.environment:
         return Stage.action;
       case Stage.action:
-        return Stage.settlement;
+        return Stage.damage;
+      case Stage.damage:
+        return Stage.talk;
+      case Stage.talk:
+        return Stage.vote;
+      case Stage.vote:
+        return isTieVote ? Stage.tieBreak : Stage.settlement;
+      case Stage.tieBreak:
+        return Stage.vote;
       case Stage.settlement:
-        return Stage.discussionVote;
-      case Stage.review:
-        return Stage.review;
+        return isFinal ? Stage.settlement : Stage.preparation;
       default:
-        throw new Error(`Unknown stage: ${input.current}`);
+        throw new Error(`Unknown stage: ${currentStage}`);
     }
   }
 
-  isValidTransition(current: Stage, candidate: Stage, isFinal = false): boolean {
-    return this.next({ current, isFinal }) === candidate;
+  isValidTransition(from: Stage, to: Stage): boolean {
+    try {
+      const normalNext = this.next({ currentStage: from });
+      const tieNext = this.next({ currentStage: from, isTieVote: true });
+      return normalNext === to || tieNext === to;
+    } catch {
+      return false;
+    }
   }
 }

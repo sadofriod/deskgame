@@ -1,20 +1,40 @@
-import { Role, RoleConfig, RoomConfig } from "../types";
+export interface IdentityAssignment {
+  openId: string;
+  identityCode: string; // "passenger" or "fatter"
+  roleOptions: string[]; // 2 role codes offered
+  initialHandCards: { cardInstanceId: string; actionCardCode: string }[];
+}
 
 export interface DealServiceInput {
-  players: string[];
-  roomConfig: RoomConfig;
+  players: string[]; // openIds ordered by seat
+  playerCount: number;
   seed: string;
 }
 
-export interface CandidateRoleAssignment {
-  openId: string;
-  roles: Role[];
-}
+const IDENTITY_DISTRIBUTION: Record<number, { passenger: number; fatter: number }> = {
+  5: { passenger: 3, fatter: 2 },
+  6: { passenger: 4, fatter: 2 },
+  7: { passenger: 5, fatter: 2 },
+  8: { passenger: 6, fatter: 2 },
+  9: { passenger: 6, fatter: 3 },
+  10: { passenger: 7, fatter: 3 },
+};
+
+const ROLE_POOL = [
+  "broker", "alien", "pumpkin", "vampire",
+  "plague_doctor", "prophet", "big_bro", "sunshine_boy",
+];
+
+const CARD_POOL = ["endure", "scold", "blow", "suck", "grab", "listen"];
+
+const SEED_MAX_LEN = 256;
 
 function seededRng(seed: string): () => number {
+  const safeSeed = String(seed).slice(0, SEED_MAX_LEN);
   let h = 0;
-  for (let i = 0; i < seed.length; i++) {
-    h = (Math.imul(31, h) + seed.charCodeAt(i)) | 0;
+  for (let i = 0; i < SEED_MAX_LEN; i++) {
+    // Use 0 for positions beyond the actual seed length (constant loop bound)
+    h = (Math.imul(31, h) + (i < safeSeed.length ? safeSeed.charCodeAt(i) : 0)) | 0;
   }
   let state = h >>> 0;
   return () => {
@@ -30,30 +50,55 @@ function shuffle<T>(arr: T[], rng: () => number): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
+    // Both i and j are valid indices since j < i + 1 <= a.length
+    const tmp = a[i] as T;
+    a[i] = a[j] as T;
+    a[j] = tmp;
   }
   return a;
 }
 
-function buildRolePool(roleConfig: RoleConfig): Role[] {
-  if (roleConfig === "independent") {
-    return [Role.fatter1, Role.fatter2, Role.passenger, Role.passenger];
-  }
-  return [Role.fatter, Role.passenger, Role.passenger, Role.passenger];
-}
-
-function pickCandidateRoles(rolePool: Role[], rng: () => number): Role[] {
-  return shuffle(rolePool, rng).slice(0, 3);
-}
-
 export class DealService {
-  deal(input: DealServiceInput): CandidateRoleAssignment[] {
+  deal(input: DealServiceInput): IdentityAssignment[] {
+    if (input.players.length !== input.playerCount) {
+      throw new Error(
+        `players.length (${input.players.length}) must equal playerCount (${input.playerCount})`
+      );
+    }
+    if (input.playerCount < 5 || input.playerCount > 10) {
+      throw new Error(`playerCount must be 5–10, got ${input.playerCount}`);
+    }
     const rng = seededRng(input.seed);
-    const rolePool = buildRolePool(input.roomConfig.roleConfig);
-    const orderedPlayers = shuffle([...input.players], rng);
-    return orderedPlayers.map((openId) => ({
-      openId,
-      roles: pickCandidateRoles(rolePool, rng),
-    }));
+    const dist = IDENTITY_DISTRIBUTION[input.playerCount]!;
+
+    // Build identity array; total must match player count
+    const identities: string[] = [
+      ...Array(dist.passenger).fill("passenger"),
+      ...Array(dist.fatter).fill("fatter"),
+    ];
+    const shuffledIdentities = shuffle(identities, rng);
+
+    // Shuffle card pool for initial hand distribution (cycles if more players than card types)
+    const shuffledCards = shuffle([...CARD_POOL], rng);
+    const cardCount = shuffledCards.length;
+
+    return input.players.map((openId, index) => {
+      // Each player gets 2 unique roles drawn from the pool
+      const shuffledRoles = shuffle([...ROLE_POOL], rng);
+      // Use index directly — shuffledIdentities.length equals input.players.length for valid player counts
+      const identityCode = shuffledIdentities[index] ?? "passenger";
+      return {
+        openId,
+        identityCode,
+        roleOptions: [shuffledRoles[0]!, shuffledRoles[1]!],
+        initialHandCards: [
+          {
+            cardInstanceId: `${openId}-card-0`,
+            // Cycle through card pool so every player always gets a card
+            actionCardCode: shuffledCards[index % cardCount] ?? "listen",
+          },
+        ],
+      };
+    });
   }
 }

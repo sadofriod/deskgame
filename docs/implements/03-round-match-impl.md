@@ -4,26 +4,31 @@
 
 ## Round 值对象
 
-Round 是单回合的状态快照，在正式对局开始后按回合创建，随阶段推进持续更新。
+Round 是单层的状态快照，在 preparation 阶段先创建为空壳，随后随阶段推进持续更新。
 
 ### Round 状态
 
-- round
+- floor
 - environmentCard
-- betSubmissions
-- actionLogs
+- roundKind
+- currentVoteRound
+- actionSubmissions
+- damages
 - voteSubmissions
-- voteResult
 - settlementResult
+- voteResult
 - stageSnapshots
 
 ### 更新流程
 
-- 押牌阶段结束后，追加 BetSubmission 列表。
-- 系统揭示环境牌时，写入 environmentCard。
-- 玩家行动阶段记录 actionLogs。
-- 伤害结算阶段写入 settlementResult。
-- 发言投票阶段追加 VoteSubmission 列表并记录 VoteResolved。
+- preparation 阶段创建 Round 空壳，并初始化起始玩家与 currentVoteRound = 1。
+- bet 阶段写入 ActionSubmission 列表，sequence 从 1 开始。
+- environment 阶段设置 environmentCard 与 roundKind。
+- action 阶段补充目标、检视与效果执行结果；若存在直出牌，则追加新的 ActionSubmission sequence。
+- damage 阶段写入 damages 与 settlementResult。
+- vote 阶段按 currentVoteRound 追加 VoteSubmission 列表。
+- tieBreak 阶段固化 tieTargets；若回到 vote，则 currentVoteRound 递增。
+- settlement 阶段写入最终 voteResult 并决定是否进入下一层。
 
 ## Match 聚合
 
@@ -38,11 +43,14 @@ Match 汇总所有 Round 与胜负结果，用于复盘输出。
 
 ### 生命周期
 
-- RoleSelectionCompleted 时创建 Match。
-- 每回合结束追加 Round 快照。
+- StartGame 时创建 Match。
+- 每层结束追加 Round 快照。
 - WinnerDecided 后终局封存。
 
 ## 持久化说明
 
-- Round 以 (roomId, round) 存储，提交、行动日志与结算为 JSON 字段。
-- Match 可存 rounds 的 JSON 复盘，或引用 Round 行。
+- Round 以 (matchId, floor) 存储。
+- environmentCard 与 roundKind 在 reveal 前允许为空。
+- 行动、目标、投票、伤害、检视拆到独立子表，避免全部堆入 JSON。
+- 行动子表以 sequence 保留同层多次出牌；投票子表以 voteRound 保留重投历史。
+- Match 可存 reviewSnapshot 作为复盘冗余结构，同时保留对 Round 行的引用。

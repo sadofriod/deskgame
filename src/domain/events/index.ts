@@ -1,24 +1,20 @@
 import {
-  ActionCard,
-  EnvironmentCard,
+  Camp,
   GameState,
-  Role,
-  RoomConfig,
   SettlementResult,
   Stage,
   VoteResult,
-  WinnerCamp,
 } from "../types";
 
 export type DomainEventName =
   | "RoomCreated"
   | "PlayerJoinedRoom"
   | "PlayerRemovedFromRoom"
-  | "RoomConfigUpdated"
-  | "PlayerReadyStateChanged"
   | "RoleSelectionStarted"
   | "RoleSelectionCompleted"
-  | "BetSubmitted"
+  | "CardsDealt"
+  | "RoleSelected"
+  | "ActionSubmitted"
   | "EnvironmentRevealed"
   | "RoundSettled"
   | "PlayerEliminated"
@@ -35,10 +31,9 @@ export interface BaseDomainEvent {
 
 export interface RoomCreated extends BaseDomainEvent {
   name: "RoomCreated";
-  roomCode: string;
   ownerOpenId: string;
   gameState: GameState;
-  currentRound: number;
+  currentFloor: number;
   currentStage: Stage;
 }
 
@@ -55,81 +50,93 @@ export interface PlayerRemovedFromRoom extends BaseDomainEvent {
   playerCount: number;
 }
 
-export interface RoomConfigUpdated extends BaseDomainEvent {
-  name: "RoomConfigUpdated";
-  roomConfig: RoomConfig;
-}
-
-export interface PlayerReadyStateChanged extends BaseDomainEvent {
-  name: "PlayerReadyStateChanged";
-  openId: string;
-  ready: boolean;
-  allReady: boolean;
+export interface CardsDealt extends BaseDomainEvent {
+  name: "CardsDealt";
+  matchId: string;
+  currentFloor: number;
+  currentStage: Stage;
+  players: Array<{
+    openId: string;
+    identityCode: string;
+    roleOptions: string[];
+    initialHandCards: { cardInstanceId: string; actionCardCode: string }[];
+  }>;
 }
 
 export interface RoleSelectionStarted extends BaseDomainEvent {
   name: "RoleSelectionStarted";
-  candidateRoles: Array<{ openId: string; roles: Role[] }>;
-  currentStage: Stage.roleSelection;
+  matchId: string;
+  pendingPlayers: string[];
+}
+
+export interface RoleSelected extends BaseDomainEvent {
+  name: "RoleSelected";
+  openId: string;
+  roleCode: string;
 }
 
 export interface RoleSelectionCompleted extends BaseDomainEvent {
   name: "RoleSelectionCompleted";
-  currentRound: number;
-  currentStage: Stage.bet;
-  envDeck: EnvironmentCard[];
+  matchId: string;
+  currentFloor: number;
+  currentStage: Stage;
 }
 
-export interface BetSubmitted extends BaseDomainEvent {
-  name: "BetSubmitted";
-  round: number;
+export interface ActionSubmitted extends BaseDomainEvent {
+  name: "ActionSubmitted";
+  floor: number;
   openId: string;
-  passedBet: boolean;
-  selectedAction: ActionCard | null;
+  sequence: number;
+  sourceStage: Stage;
 }
 
 export interface EnvironmentRevealed extends BaseDomainEvent {
   name: "EnvironmentRevealed";
-  round: number;
-  environmentCard: EnvironmentCard;
+  floor: number;
+  environmentCard: string;
+  roundKind: string;
 }
 
 export interface RoundSettled extends BaseDomainEvent {
   name: "RoundSettled";
-  round: number;
+  floor: number;
+  stage: Stage;
   settlementResult: SettlementResult;
 }
 
 export interface PlayerEliminated extends BaseDomainEvent {
   name: "PlayerEliminated";
   openId: string;
-  round: number;
+  floor: number;
 }
 
 export interface VoteSubmitted extends BaseDomainEvent {
   name: "VoteSubmitted";
-  round: number;
+  floor: number;
+  voteRound: number;
   openId: string;
-  voteTarget: string;
   votePowerAtSubmit: number;
 }
 
 export interface VoteResolved extends BaseDomainEvent {
   name: "VoteResolved";
-  round: number;
+  floor: number;
+  voteRound: number;
   voteResult: VoteResult;
+  nextStage: Stage;
 }
 
 export interface StageAdvanced extends BaseDomainEvent {
   name: "StageAdvanced";
-  previousStage: Stage;
-  currentStage: Stage;
-  currentRound: number;
+  currentFloor: number;
+  fromStage: Stage;
+  toStage: Stage;
+  currentVoteRound: number;
 }
 
 export interface WinnerDecided extends BaseDomainEvent {
   name: "WinnerDecided";
-  winnerCamp: WinnerCamp;
+  winnerCamp: Camp;
   reason: string;
   decidedAt: Date;
 }
@@ -138,11 +145,11 @@ export type DomainEvent =
   | RoomCreated
   | PlayerJoinedRoom
   | PlayerRemovedFromRoom
-  | RoomConfigUpdated
-  | PlayerReadyStateChanged
+  | CardsDealt
   | RoleSelectionStarted
+  | RoleSelected
   | RoleSelectionCompleted
-  | BetSubmitted
+  | ActionSubmitted
   | EnvironmentRevealed
   | RoundSettled
   | PlayerEliminated

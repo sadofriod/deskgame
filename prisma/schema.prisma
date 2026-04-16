@@ -14,129 +14,497 @@ enum GameState {
 }
 
 enum Stage {
-  night
+  preparation
+  bet
+  environment
   action
-  env
-  actionResolve
-  hurt
+  damage
   talk
   vote
+  settlement
+  tieBreak
 }
 
-enum Role {
-  fatter1
-  fatter2
-  fatter
-  passenger
-}
-
-enum ActionCard {
-  listen
-  blow
-  grab
-  endure
-  suck
-  scold
-}
-
-enum EnvironmentCard {
+enum RoundKind {
   gas
-  stink
-  stew
-  none
+  safe
 }
 
-model Room {
-  roomId       String   @id @db.VarChar(64)
-  ownerOpenId  String   @db.VarChar(64)
-  gameState    GameState
-  playerCount  Int
-  roleConfig   String   @db.VarChar(32)
-  currentFloor Int
-  currentStage Stage
-  envDeck      Json
-  version      Int      @default(1)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+enum Camp {
+  passenger
+  fatter
+}
 
-  players Player[]
-  rounds  Round[]
+model RuleSet {
+  code              String   @id @db.VarChar(64)
+  name              String   @db.VarChar(128)
+  description       String?  @db.Text
+  totalFloors       Int      @default(8)
+  gasRoundsToFinish Int      @default(4)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @default(now()) @updatedAt
+
+  rules             RuleDefinition[]
+  identities        IdentityDefinition[]
+  identityConfigs   IdentityDistribution[]
+  actionCards       ActionCardDefinition[]
+  environmentCards  EnvironmentCardDefinition[]
+  deckTemplates     EnvironmentDeckTemplate[]
+  roles             RoleDefinition[]
+  rooms             Room[]
+  matches           Match[]
+}
+
+model RuleDefinition {
+  ruleSetCode String  @db.VarChar(64)
+  code        String  @db.VarChar(64)
+  category    String  @db.VarChar(32)
+  name        String  @db.VarChar(128)
+  description String  @db.Text
+  engineKey   String  @db.VarChar(128)
+  params      Json?
+  sortOrder   Int     @default(0)
+
+  ruleSet RuleSet @relation(fields: [ruleSetCode], references: [code], onDelete: Cascade)
+
+  @@id([ruleSetCode, code])
+  @@index([ruleSetCode, category])
+}
+
+model IdentityDefinition {
+  ruleSetCode             String  @db.VarChar(64)
+  code                    String  @db.VarChar(32)
+  name                    String  @db.VarChar(32)
+  camp                    Camp
+  description             String  @db.Text
+  knowsEnvironmentOrder   Boolean @default(false)
+  defaultKnowsTeammates   Boolean @default(false)
+  sortOrder               Int     @default(0)
+
+  ruleSet       RuleSet                @relation(fields: [ruleSetCode], references: [code], onDelete: Cascade)
+  distributions IdentityDistribution[]
+  matchPlayers  MatchPlayer[]
+
+  @@id([ruleSetCode, code])
+  @@unique([ruleSetCode, name])
+}
+
+model IdentityDistribution {
+  ruleSetCode    String  @db.VarChar(64)
+  playerCount    Int
+  identityCode   String  @db.VarChar(32)
+  quantity       Int
+  knowsTeammates Boolean @default(false)
+
+  ruleSet  RuleSet            @relation(fields: [ruleSetCode], references: [code], onDelete: Cascade)
+  identity IdentityDefinition @relation(fields: [ruleSetCode, identityCode], references: [ruleSetCode, code], onDelete: Restrict)
+
+  @@id([ruleSetCode, playerCount, identityCode])
+  @@index([ruleSetCode, playerCount])
+}
+
+model ActionCardDefinition {
+  ruleSetCode            String   @db.VarChar(64)
+  code                   String   @db.VarChar(32)
+  name                   String   @db.VarChar(32)
+  description            String   @db.Text
+  roundKindRestriction   RoundKind?
+  drawCountOnGas         Int      @default(0)
+  drawCountOnSafe        Int      @default(0)
+  voteBonus              Decimal  @default(0) @db.Decimal(4, 1)
+  extraSelfDamageOnGas   Int      @default(0)
+  blocksAllDamage        Boolean  @default(false)
+  cannotAbstain          Boolean  @default(false)
+  canDirectPlayInAction  Boolean  @default(false)
+  sortOrder              Int      @default(0)
+
+  ruleSet      RuleSet                 @relation(fields: [ruleSetCode], references: [code], onDelete: Cascade)
+  effects      ActionCardEffect[]
+  handCards    MatchPlayerActionCard[]
+  roundActions RoundActionSubmission[]
+
+  @@id([ruleSetCode, code])
+  @@unique([ruleSetCode, name])
+}
+
+model ActionCardEffect {
+  ruleSetCode        String  @db.VarChar(64)
+  cardCode           String  @db.VarChar(32)
+  code               String  @db.VarChar(64)
+  timing             String  @db.VarChar(32)
+  engineKey          String  @db.VarChar(128)
+  targeting          String  @db.VarChar(64)
+  damage             Int?
+  drawCount          Int?
+  canInspectIdentity Boolean @default(false)
+  ignoresDefense     Boolean @default(false)
+  description        String  @db.Text
+  params             Json?
+
+  card ActionCardDefinition @relation(fields: [ruleSetCode, cardCode], references: [ruleSetCode, code], onDelete: Cascade)
+
+  @@id([ruleSetCode, cardCode, code])
+}
+
+model EnvironmentCardDefinition {
+  ruleSetCode    String    @db.VarChar(64)
+  code           String    @db.VarChar(32)
+  name           String    @db.VarChar(32)
+  roundKind      RoundKind
+  baseDamageAll  Int       @default(0)
+  description    String    @db.Text
+  sortOrder      Int       @default(0)
+
+  ruleSet   RuleSet                       @relation(fields: [ruleSetCode], references: [code], onDelete: Cascade)
+  effects   EnvironmentCardEffect[]
+  deckItems EnvironmentDeckTemplateItem[]
+  deckSlots MatchEnvironmentDeck[]
+  rounds    Round[]
+
+  @@id([ruleSetCode, code])
+  @@unique([ruleSetCode, name])
+}
+
+model EnvironmentCardEffect {
+  ruleSetCode String @db.VarChar(64)
+  cardCode    String @db.VarChar(32)
+  code        String @db.VarChar(64)
+  engineKey   String @db.VarChar(128)
+  targeting   String @db.VarChar(64)
+  damage      Int
+  description String @db.Text
+  params      Json?
+
+  card EnvironmentCardDefinition @relation(fields: [ruleSetCode, cardCode], references: [ruleSetCode, code], onDelete: Cascade)
+
+  @@id([ruleSetCode, cardCode, code])
+}
+
+model EnvironmentDeckTemplate {
+  ruleSetCode   String   @db.VarChar(64)
+  code          String   @db.VarChar(64)
+  name          String   @db.VarChar(128)
+  description   String?  @db.Text
+  totalCards    Int
+  revealedCards Int
+
+  ruleSet RuleSet                        @relation(fields: [ruleSetCode], references: [code], onDelete: Cascade)
+  items   EnvironmentDeckTemplateItem[]
+  rooms   Room[]
   matches Match[]
+
+  @@id([ruleSetCode, code])
 }
 
-model Player {
-  roomId     String   @db.VarChar(64)
-  openId     String   @db.VarChar(64)
-  nickname   String   @db.VarChar(64)
-  avatar     String   @db.VarChar(256)
-  role       Role
-  hp         Int      @default(4)
-  votePower  Float    @default(1)
-  isAlive    Boolean  @default(true)
-  actionCard ActionCard?
-  voteTarget String?  @db.VarChar(64)
-  isReady    Boolean  @default(false)
-  joinTime   DateTime @default(now())
+model EnvironmentDeckTemplateItem {
+  ruleSetCode         String  @db.VarChar(64)
+  templateCode        String  @db.VarChar(64)
+  environmentCardCode String  @db.VarChar(32)
+  quantity            Int
+  isOptional          Boolean @default(false)
 
-  room Room @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
+  template        EnvironmentDeckTemplate  @relation(fields: [ruleSetCode, templateCode], references: [ruleSetCode, code], onDelete: Cascade)
+  environmentCard EnvironmentCardDefinition @relation(fields: [ruleSetCode, environmentCardCode], references: [ruleSetCode, code], onDelete: Restrict)
 
-  @@id([roomId, openId])
-  @@index([roomId])
+  @@id([ruleSetCode, templateCode, environmentCardCode])
 }
 
-model Round {
-  roomId            String           @db.VarChar(64)
-  floor             Int
-  environmentCard   EnvironmentCard?
-  actionSubmissions Json
-  voteSubmissions   Json
-  settlementResult  Json
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+model RoleDefinition {
+  ruleSetCode        String  @db.VarChar(64)
+  code               String  @db.VarChar(64)
+  sortOrder          Int
+  name               String  @db.VarChar(64)
+  baseHp             Int     @default(4)
+  abilityTiming      String? @db.VarChar(32)
+  abilityKey         String? @db.VarChar(128)
+  abilityDescription String? @db.Text
+  abilityConfig      Json?
+  isEnabled          Boolean @default(true)
 
-  room Room @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
+  ruleSet   RuleSet                @relation(fields: [ruleSetCode], references: [code], onDelete: Cascade)
+  rolePicks MatchPlayerRoleOption[]
+  players   MatchPlayer[]
 
-  @@id([roomId, floor])
-  @@index([roomId])
-}
-
-model Match {
-  matchId      String   @id @db.VarChar(64)
-  roomId       String   @db.VarChar(64)
-  rounds       Json
-  winnerResult Json
-  createdAt    DateTime @default(now())
-
-  room Room @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
-
-  @@index([roomId])
-}
-
-model PersistedRoom {
-  roomId      String   @id @db.VarChar(64)
-  roomCode    String   @db.VarChar(16)
-  ownerOpenId String   @db.VarChar(64)
-  snapshot    Json
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@index([roomCode])
-  @@index([ownerOpenId])
+  @@id([ruleSetCode, code])
+  @@unique([ruleSetCode, name])
+  @@index([ruleSetCode, sortOrder])
 }
 
 model User {
   openId    String   @id @db.VarChar(64)
-  unionId   String?  @db.VarChar(64)
-  nickname  String   @map("nickName") @db.VarChar(64)
-  avatarUrl String?  @db.VarChar(256)
-  gender    Int?
-  city      String?  @db.VarChar(64)
-  province  String?  @db.VarChar(64)
-  country   String?  @db.VarChar(64)
-  language  String?  @db.VarChar(32)
+  nickname  String   @db.VarChar(64)
+  avatar    String?  @db.VarChar(256)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 
-  @@map("wechat_users")
-  @@index([unionId])
+  ownedRooms      Room[]                  @relation("RoomOwner")
+  roomMemberships RoomPlayer[]
+  matchPlayers    MatchPlayer[]
+}
+
+model Room {
+  roomId            String   @id @db.VarChar(64)
+  ownerOpenId       String   @db.VarChar(64)
+  ruleSetCode       String   @db.VarChar(64)
+  deckTemplateCode  String   @db.VarChar(64)
+  gameState         GameState
+  playerCount       Int      @default(0)
+  currentFloor      Int      @default(1)
+  currentStage      Stage    @default(preparation)
+  currentMatchId    String?  @db.VarChar(64)
+  version           Int      @default(1)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @default(now()) @updatedAt
+
+  owner        User                    @relation("RoomOwner", fields: [ownerOpenId], references: [openId], onDelete: Restrict)
+  ruleSet      RuleSet                 @relation(fields: [ruleSetCode], references: [code], onDelete: Restrict)
+  deckTemplate EnvironmentDeckTemplate @relation(fields: [ruleSetCode, deckTemplateCode], references: [ruleSetCode, code], onDelete: Restrict)
+  players      RoomPlayer[]
+  matches      Match[]
+
+  @@index([ruleSetCode])
+}
+
+model RoomPlayer {
+  roomId    String   @db.VarChar(64)
+  openId    String   @db.VarChar(64)
+  seatNo    Int
+  isReady   Boolean  @default(false)
+  joinedAt  DateTime @default(now())
+  leftAt    DateTime?
+
+  room Room @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
+  user User @relation(fields: [openId], references: [openId], onDelete: Restrict)
+
+  @@id([roomId, openId])
+  @@unique([roomId, seatNo])
+}
+
+model Match {
+  matchId           String   @id @db.VarChar(64)
+  roomId            String   @db.VarChar(64)
+  ruleSetCode       String   @db.VarChar(64)
+  deckTemplateCode  String   @db.VarChar(64)
+  winnerCamp        Camp?
+  winnerReason      String?  @db.Text
+  startedAt         DateTime @default(now())
+  endedAt           DateTime?
+  reviewSnapshot    Json?
+
+  room         Room                    @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
+  ruleSet      RuleSet                 @relation(fields: [ruleSetCode], references: [code], onDelete: Restrict)
+  deckTemplate EnvironmentDeckTemplate @relation(fields: [ruleSetCode, deckTemplateCode], references: [ruleSetCode, code], onDelete: Restrict)
+  deck         MatchEnvironmentDeck[]
+  players      MatchPlayer[]
+  rounds       Round[]
+
+  @@index([roomId])
+  @@index([ruleSetCode])
+}
+
+model MatchEnvironmentDeck {
+  matchId              String    @db.VarChar(64)
+  position             Int
+  ruleSetCode          String    @db.VarChar(64)
+  environmentCardCode  String    @db.VarChar(32)
+  isRemoved            Boolean   @default(false)
+  isRevealed           Boolean   @default(false)
+  revealedAt           DateTime?
+
+  match           Match                     @relation(fields: [matchId], references: [matchId], onDelete: Cascade)
+  environmentCard EnvironmentCardDefinition @relation(fields: [ruleSetCode, environmentCardCode], references: [ruleSetCode, code], onDelete: Restrict)
+
+  @@id([matchId, position])
+}
+
+model MatchPlayer {
+  matchId               String   @db.VarChar(64)
+  openId                String   @db.VarChar(64)
+  ruleSetCode           String   @db.VarChar(64)
+  seatNo                Int
+  identityCode          String   @db.VarChar(32)
+  chosenRoleCode        String?  @db.VarChar(64)
+  maxHp                 Int?
+  currentHp             Int?
+  isAlive               Boolean  @default(true)
+  canSpeak              Boolean  @default(true)
+  canVote               Boolean  @default(true)
+  voteModifier          Decimal  @default(0) @db.Decimal(4, 1)
+  eliminatedAt          DateTime?
+  identityRevealedAt    DateTime?
+  roleSelectedAt        DateTime?
+  status                Json?
+
+  match             Match                  @relation(fields: [matchId], references: [matchId], onDelete: Cascade)
+  user              User                   @relation(fields: [openId], references: [openId], onDelete: Restrict)
+  identity          IdentityDefinition     @relation(fields: [ruleSetCode, identityCode], references: [ruleSetCode, code], onDelete: Restrict)
+  chosenRole        RoleDefinition?        @relation(fields: [ruleSetCode, chosenRoleCode], references: [ruleSetCode, code], onDelete: Restrict)
+  roleOptions       MatchPlayerRoleOption[]
+  handCards         MatchPlayerActionCard[]
+  actions           RoundActionSubmission[] @relation("PlayerActions")
+  actionTargeted    RoundActionTarget[]    @relation("ActionTarget")
+  votesCast         RoundVoteSubmission[]  @relation("VoteCaster")
+  votesReceived     RoundVoteSubmission[]  @relation("VoteTarget")
+  damagesTaken      RoundDamage[]          @relation("DamageTarget")
+  damagesDealt      RoundDamage[]          @relation("DamageSource")
+  revealsMade       IdentityReveal[]       @relation("RevealActor")
+  revealsReceived   IdentityReveal[]       @relation("RevealTarget")
+
+  @@id([matchId, openId])
+  @@unique([matchId, seatNo])
+  @@index([matchId, identityCode])
+}
+
+model MatchPlayerRoleOption {
+  matchId      String   @db.VarChar(64)
+  openId       String   @db.VarChar(64)
+  ruleSetCode  String   @db.VarChar(64)
+  roleCode     String   @db.VarChar(64)
+  isChosen     Boolean  @default(false)
+  offeredAt    DateTime @default(now())
+  chosenAt     DateTime?
+
+  player MatchPlayer   @relation(fields: [matchId, openId], references: [matchId, openId], onDelete: Cascade)
+  role   RoleDefinition @relation(fields: [ruleSetCode, roleCode], references: [ruleSetCode, code], onDelete: Restrict)
+
+  @@id([matchId, openId, roleCode])
+}
+
+model MatchPlayerActionCard {
+  cardInstanceId  String   @id @default(cuid()) @db.VarChar(32)
+  matchId         String   @db.VarChar(64)
+  openId          String   @db.VarChar(64)
+  ruleSetCode     String   @db.VarChar(64)
+  actionCardCode  String   @db.VarChar(32)
+  source          String?  @db.VarChar(64)
+  acquiredAt      DateTime @default(now())
+  consumedAt      DateTime?
+  discardedAt     DateTime?
+
+  player            MatchPlayer             @relation(fields: [matchId, openId], references: [matchId, openId], onDelete: Cascade)
+  actionCard        ActionCardDefinition    @relation(fields: [ruleSetCode, actionCardCode], references: [ruleSetCode, code], onDelete: Restrict)
+  actionSubmissions RoundActionSubmission[]
+
+  @@index([matchId, openId, consumedAt])
+}
+
+model Round {
+  matchId                String    @db.VarChar(64)
+  floor                  Int
+  ruleSetCode            String    @db.VarChar(64)
+  environmentCardCode    String?   @db.VarChar(32)
+  roundKind              RoundKind?
+  currentVoteRound       Int       @default(1)
+  actionStarterOpenId    String?   @db.VarChar(64)
+  speakerStarterOpenId   String?   @db.VarChar(64)
+  settlementResult       Json?
+  voteResult             Json?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @default(now()) @updatedAt
+
+  match           Match                      @relation(fields: [matchId], references: [matchId], onDelete: Cascade)
+  environmentCard EnvironmentCardDefinition? @relation(fields: [ruleSetCode, environmentCardCode], references: [ruleSetCode, code], onDelete: Restrict)
+  actions         RoundActionSubmission[]
+  votes           RoundVoteSubmission[]
+  damages         RoundDamage[]
+  reveals         IdentityReveal[]
+
+  @@id([matchId, floor])
+}
+
+model RoundActionSubmission {
+  matchId         String   @db.VarChar(64)
+  floor           Int
+  actorOpenId     String   @db.VarChar(64)
+  sequence        Int
+  ruleSetCode     String   @db.VarChar(64)
+  cardInstanceId  String   @db.VarChar(32)
+  actionCardCode  String   @db.VarChar(32)
+  sourceStage     Stage
+  wasDirectPlay   Boolean  @default(false)
+  isLocked        Boolean  @default(true)
+  submittedAt     DateTime @default(now())
+  result          Json?
+
+  round      Round                 @relation(fields: [matchId, floor], references: [matchId, floor], onDelete: Cascade)
+  actor      MatchPlayer           @relation("PlayerActions", fields: [matchId, actorOpenId], references: [matchId, openId], onDelete: Cascade)
+  handCard   MatchPlayerActionCard @relation(fields: [cardInstanceId], references: [cardInstanceId], onDelete: Restrict)
+  actionCard ActionCardDefinition  @relation(fields: [ruleSetCode, actionCardCode], references: [ruleSetCode, code], onDelete: Restrict)
+  targets    RoundActionTarget[]
+
+  @@id([matchId, floor, actorOpenId, sequence])
+  @@index([matchId, floor, actorOpenId, sourceStage])
+}
+
+model RoundActionTarget {
+  matchId       String @db.VarChar(64)
+  floor         Int
+  actorOpenId   String @db.VarChar(64)
+  sequence      Int
+  targetOpenId  String @db.VarChar(64)
+  targetOrder   Int    @default(1)
+  targetType    String @db.VarChar(32)
+
+  action RoundActionSubmission @relation(fields: [matchId, floor, actorOpenId, sequence], references: [matchId, floor, actorOpenId, sequence], onDelete: Cascade)
+  target MatchPlayer           @relation("ActionTarget", fields: [matchId, targetOpenId], references: [matchId, openId], onDelete: Cascade)
+
+  @@id([matchId, floor, actorOpenId, sequence, targetOpenId, targetOrder])
+}
+
+model RoundVoteSubmission {
+  matchId         String   @db.VarChar(64)
+  floor           Int
+  voteRound       Int      @default(1)
+  voterOpenId     String   @db.VarChar(64)
+  targetOpenId    String?  @db.VarChar(64)
+  finalVotePower  Decimal  @db.Decimal(4, 1)
+  isAbstain       Boolean  @default(false)
+  submittedAt     DateTime @default(now())
+
+  round  Round        @relation(fields: [matchId, floor], references: [matchId, floor], onDelete: Cascade)
+  voter  MatchPlayer  @relation("VoteCaster", fields: [matchId, voterOpenId], references: [matchId, openId], onDelete: Cascade)
+  target MatchPlayer? @relation("VoteTarget", fields: [matchId, targetOpenId], references: [matchId, openId], onDelete: Cascade)
+
+  @@id([matchId, floor, voteRound, voterOpenId])
+  @@index([matchId, floor, voteRound, targetOpenId])
+}
+
+model RoundDamage {
+  matchId         String   @db.VarChar(64)
+  floor           Int
+  sequence        Int
+  targetOpenId    String   @db.VarChar(64)
+  sourceOpenId    String?  @db.VarChar(64)
+  sourceType      String   @db.VarChar(32)
+  sourceCode      String   @db.VarChar(64)
+  amount          Int
+  isUnavoidable   Boolean  @default(false)
+  isPrevented     Boolean  @default(false)
+  note            String?  @db.Text
+  createdAt       DateTime @default(now())
+
+  round  Round        @relation(fields: [matchId, floor], references: [matchId, floor], onDelete: Cascade)
+  target MatchPlayer  @relation("DamageTarget", fields: [matchId, targetOpenId], references: [matchId, openId], onDelete: Cascade)
+  source MatchPlayer? @relation("DamageSource", fields: [matchId, sourceOpenId], references: [matchId, openId], onDelete: Cascade)
+
+  @@id([matchId, floor, sequence])
+  @@index([matchId, floor, targetOpenId])
+}
+
+model IdentityReveal {
+  matchId              String   @db.VarChar(64)
+  floor                Int
+  sequence             Int
+  actorOpenId          String   @db.VarChar(64)
+  targetOpenId         String   @db.VarChar(64)
+  revealedIdentityCode String   @db.VarChar(32)
+  reasonCode           String   @db.VarChar(64)
+  createdAt            DateTime @default(now())
+
+  round  Round       @relation(fields: [matchId, floor], references: [matchId, floor], onDelete: Cascade)
+  actor  MatchPlayer @relation("RevealActor", fields: [matchId, actorOpenId], references: [matchId, openId], onDelete: Cascade)
+  target MatchPlayer @relation("RevealTarget", fields: [matchId, targetOpenId], references: [matchId, openId], onDelete: Cascade)
+
+  @@id([matchId, floor, sequence])
+  @@index([matchId, floor, targetOpenId])
 }

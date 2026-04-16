@@ -1,28 +1,21 @@
-// EnvironmentDeckService – docs/implements/04-domain-services-impl.md
-// Picks 8 environment cards from 9 in a reproducible, seeded manner.
+import { DeckEntry } from "../types";
 
-import { EnvironmentCard } from "../types";
-
-export interface EnvConfig {
-  hasGas: number;    // 有屁
-  hasStink: number;  // 有臭屁
-  hasStew: number;   // 有闷屁
-  none: number;      // 无屁
-  pick: number;      // how many to pick (default 8)
+export interface DeckInput {
+  ruleSetCode: string;
+  deckTemplateCode: string;
+  seed: string;
 }
 
-export const DEFAULT_ENV_CONFIG: EnvConfig = {
-  hasGas: 3,
-  hasStink: 1,
-  hasStew: 0,
-  none: 4,
-  pick: 8,
-};
+// DeckEntry is re-exported from domain types
+
+const SEED_MAX_LEN = 256;
 
 function seededRng(seed: string): () => number {
+  const safeSeed = String(seed).slice(0, SEED_MAX_LEN);
   let h = 0;
-  for (let i = 0; i < seed.length; i++) {
-    h = (Math.imul(31, h) + seed.charCodeAt(i)) | 0;
+  for (let i = 0; i < SEED_MAX_LEN; i++) {
+    // Use 0 for positions beyond the actual seed length (constant loop bound)
+    h = (Math.imul(31, h) + (i < safeSeed.length ? safeSeed.charCodeAt(i) : 0)) | 0;
   }
   let state = h >>> 0;
   return () => {
@@ -38,22 +31,43 @@ function shuffle<T>(arr: T[], rng: () => number): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
+    [a[i], a[j]] = [a[j]!, a[i]!];
   }
   return a;
 }
 
 export class EnvironmentDeckService {
-  generate(seed: string, config: EnvConfig = DEFAULT_ENV_CONFIG): EnvironmentCard[] {
-    const pool: EnvironmentCard[] = [
-      ...Array(config.hasGas).fill(EnvironmentCard.gas),
-      ...Array(config.hasStink).fill(EnvironmentCard.stink),
-      ...Array(config.hasStew).fill(EnvironmentCard.stew),
-      ...Array(config.none).fill(EnvironmentCard.none),
-    ];
+  generate(input: DeckInput): DeckEntry[] {
+    const { ruleSetCode, deckTemplateCode, seed } = input;
+
+    // Validate supported rule set / deck template combination
+    if (ruleSetCode !== "classic_v1" || deckTemplateCode !== "classic_pool_v1") {
+      throw new Error(
+        `Unsupported ruleSetCode/deckTemplateCode: ${ruleSetCode}/${deckTemplateCode}. ` +
+        `Only classic_v1/classic_pool_v1 is supported.`
+      );
+    }
 
     const rng = seededRng(seed);
+
+    // classic_pool_v1: gas×3, no_gas×4, smelly_gas×1, stuffy_gas×1 = 9 cards
+    const pool: string[] = [
+      "gas", "gas", "gas",
+      "no_gas", "no_gas", "no_gas", "no_gas",
+      "smelly_gas",
+      "stuffy_gas",
+    ];
+
+    // Remove 1 optional card (smelly_gas or stuffy_gas) randomly
+    const optionals = ["smelly_gas", "stuffy_gas"];
+    const removeCard = optionals[Math.floor(rng() * optionals.length)]!;
+    const removeIdx = pool.indexOf(removeCard);
+    if (removeIdx >= 0) pool.splice(removeIdx, 1);
+
+    // Shuffle remaining 8
     const shuffled = shuffle(pool, rng);
-    return shuffled.slice(0, config.pick);
+
+    // Return with positions 1-8
+    return shuffled.map((code, i) => ({ position: i + 1, environmentCardCode: code }));
   }
 }

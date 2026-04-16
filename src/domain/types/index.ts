@@ -1,78 +1,53 @@
-export type RoleConfig = "independent" | "faction";
-
-export interface RoomConfig {
-  playerCount: number;
-  roleConfig: RoleConfig;
-}
+// ── New domain types based on docs/implements/schema.prisma ──────────────────
 
 export enum GameState {
   wait = "wait",
-  selecting = "selecting",
-  playing = "playing",
-  ended = "ended",
+  start = "start",
+  end = "end",
 }
 
 export enum Stage {
-  lobby = "lobby",
-  roleSelection = "roleSelection",
+  preparation = "preparation",
   bet = "bet",
+  environment = "environment",
   action = "action",
+  damage = "damage",
+  talk = "talk",
+  vote = "vote",
   settlement = "settlement",
-  discussionVote = "discussionVote",
-  review = "review",
+  tieBreak = "tieBreak",
 }
 
-export const STAGE_ORDER: Stage[] = [
-  Stage.lobby,
-  Stage.roleSelection,
-  Stage.bet,
-  Stage.action,
-  Stage.settlement,
-  Stage.discussionVote,
-  Stage.review,
-];
-
-export enum Role {
-  fatter1 = "fatter1",
-  fatter2 = "fatter2",
-  fatter = "fatter",
-  passenger = "passenger",
-}
-
-export enum ActionCard {
-  listen = "listen",
-  blow = "blow",
-  grab = "grab",
-  endure = "endure",
-  suck = "suck",
-  scold = "scold",
-}
-
-export enum EnvironmentCard {
-  gas = "gas",
-  stink = "stink",
-  stew = "stew",
-  none = "none",
-}
-
-export enum WinnerCamp {
+export enum Camp {
   passenger = "passenger",
   fatter = "fatter",
-  draw = "draw",
 }
 
-export interface VoteResult {
+// Backward-compat alias used by WinnerJudgementService consumers
+export { Camp as WinnerCamp };
+
+export type RoundKind = "gas" | "safe";
+
+export interface HandCard {
+  cardInstanceId: string;
+  actionCardCode: string;
+  consumed: boolean;
+}
+
+export interface ActionSubmission {
+  openId: string;
+  cardInstanceId: string;
+  actionCardCode: string;
+  sequence: number;
+  sourceStage: Stage;
+  isLocked: boolean;
+}
+
+export interface VoteSubmissionRecord {
+  voteRound: number;
+  voterOpenId: string;
   targetOpenId: string | null;
-  votes: number;
-  isTie: boolean;
-  tieTargets: string[];
-  needRevote: boolean;
-}
-
-export interface WinnerResult {
-  winnerCamp: WinnerCamp;
-  reason: string;
-  decidedAt: Date;
+  votePowerAtSubmit: number;
 }
 
 export interface DamageRecord {
@@ -81,45 +56,77 @@ export interface DamageRecord {
   reason: string;
 }
 
-export interface HealRecord {
-  openId: string;
-  heal: number;
-  reason: string;
-}
-
 export interface SettlementResult {
   damages: DamageRecord[];
-  heals: HealRecord[];
   eliminated: string[];
 }
 
-export interface BetSubmission {
-  openId: string;
-  selectedAction: ActionCard | null;
-  passedBet: boolean;
-  submittedAt: Date;
+export interface VoteResult {
+  targetOpenId: string | null;
+  votes: number;
+  isTie: boolean;
+  tieTargets: string[];
 }
 
-export interface VoteSubmission {
-  openId: string;
-  voteTarget: string;
-  votePowerAtSubmit: number;
-  submittedAt: Date;
+export interface WinnerResult {
+  winnerCamp: Camp;
+  reason: string;
+  decidedAt: Date;
 }
 
-export interface ActionLog {
-  openId: string;
-  effect: string;
-  targetOpenIds: string[];
-}
-
-export interface Round {
-  round: number;
-  environmentCard: EnvironmentCard | null;
-  betSubmissions: BetSubmission[];
-  actionLogs: ActionLog[];
-  voteSubmissions: VoteSubmission[];
-  voteResult: VoteResult | null;
+export interface RoundState {
+  floor: number;
+  environmentCardCode: string | null;
+  roundKind: RoundKind | null;
+  currentVoteRound: number;
+  actionSubmissions: ActionSubmission[];
+  voteSubmissions: VoteSubmissionRecord[];
   settlementResult: SettlementResult | null;
-  revoteCount: number;
+  voteResult: VoteResult | null;
+}
+
+export interface MatchPlayerState {
+  openId: string;
+  seatNo: number;
+  identityCode: string;
+  chosenRoleCode: string | null;
+  maxHp: number | null;
+  currentHp: number | null;
+  isAlive: boolean;
+  canSpeak: boolean;
+  canVote: boolean;
+  voteModifier: number;
+  roleOptions: string[];
+  handCards: HandCard[];
+  status: Record<string, unknown>;
+}
+
+export interface RoomPlayerState {
+  openId: string;
+  seatNo: number;
+  nickname: string;
+  avatar: string;
+  isReady: boolean;
+  joinedAt: Date;
+}
+
+export interface DeckEntry {
+  position: number;
+  environmentCardCode: string;
+}
+
+export interface MatchState {
+  matchId: string;
+  players: MatchPlayerState[];
+  deck: DeckEntry[];
+  rounds: RoundState[];
+  winnerResult: WinnerResult | null;
+}
+
+// ── Legacy type aliases kept for Prisma/userRepository backward compat ────────
+export type RoleConfig = "independent" | "faction";
+
+export interface RoomConfig {
+  playerCount: number;
+  roleConfig: RoleConfig;
 }

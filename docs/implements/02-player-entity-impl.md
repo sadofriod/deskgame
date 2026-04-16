@@ -4,58 +4,53 @@
 
 ## 范围
 
-Player 实体隶属于 Room 聚合，记录行动、投票与存活所需的玩家状态。
+运行态玩家实体隶属于 Match 聚合，记录身份、角色、血量、押牌与投票所需的玩家状态。
 
 ## 实体状态
 
 - openId
-- nickname
-- avatar
-- seatNo
-- candidateRoles
-- selectedRole
-- hp
-- votePower
+- identityCode
+- chosenRoleCode（确认前可为空）
+- maxHp（确认前可为空）
+- currentHp（确认前可为空）
 - isAlive
-- selectedAction
-- passedBet
 - canSpeak
 - canVote
-- voteTarget
-- isReady
-- joinTime
+- voteModifier
+- status
 
 ## 不变量
 
-- hp <= 0 必须 isAlive = false。
-- isAlive = false 不能选择身份、押牌或投票。
-- selectedRole 一旦确认不可修改。
-- passedBet = true 时，canSpeak = false 且 canVote = false。
+- currentHp <= 0 时，默认必须 isAlive = false；特殊角色可在 status 中声明例外。
+- isAlive = false 不能提交行动或投票。
+- 空押或被禁投时不可投票；被禁言时不可发言。
 
 ## 状态变化
 
-- AssignSeat
-  - JoinRoom 时分配或重排 seatNo。
-
-- GenerateRoleOptions
-  - RoleSelectionStarted 时设置 candidateRoles。
+- AssignIdentity
+  - CardsDealt 时设置 identityCode、角色候选与待确认状态，chosenRoleCode 保持为空。
 
 - ConfirmRoleSelection
-  - 玩家确认后写入 selectedRole。
+  - 选择角色后设置 chosenRoleCode、maxHp、currentHp 与 roleSelectedAt。
 
-- SubmitBet
-  - bet 阶段锁定 selectedAction 或 passedBet。
+- DealActionCards
+  - 开局或抽牌效果触发时，向 MatchPlayerActionCard 发放手牌。
 
-- ResolveRoundPermission
-  - settlement 后根据 selectedAction 计算 votePower、canSpeak、canVote。
+- SubmitAction
+  - 在 bet 阶段锁定押牌，并以 sequence = 1 写入 RoundActionSubmission。
+
+- ResolveAction
+  - 在 action 阶段执行已锁定押牌；若存在可直出的手牌，则可追加 sequence > 1 的行动提交。
 
 - ResolveDamage
-  - 应用总伤害；若 hp <= 0，标记 isAlive = false。
+  - 在 damage 阶段应用总伤害，并同步 currentHp、canSpeak、canVote、isAlive。
 
-- ResetRoundState
-  - 新回合开始时重置 selectedAction、passedBet、voteTarget、votePower、canSpeak、canVote。
+- ResolveVotePower
+  - 在 vote 阶段根据行动牌和角色效果计算最终票权；若进入重投，则以新的 voteRound 单独记录。
 
 ## 持久化说明
 
-- Player 以 (roomId, openId) 作为主键。
-- selectedRole 与 joinTime 为长期状态，其余回合态字段在 bet 阶段前重置。
+- MatchPlayer 以 (matchId, openId) 作为主键。
+- chosenRoleCode、maxHp、currentHp 在角色确认前允许为空。
+- 手牌与押牌明细不直接堆在玩家主记录里，而是拆到 MatchPlayerActionCard 和 RoundActionSubmission。
+- 每层开始于 preparation 阶段时，重置本层的发言/投票临时状态。

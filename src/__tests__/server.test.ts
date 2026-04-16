@@ -72,35 +72,26 @@ describe("Express HTTP gateway", () => {
   afterEach(
     () =>
       new Promise<void>((resolve) => {
-        if (ORIGINAL_ADMIN_USERS === undefined) {
-          delete process.env.ADMIN_USERS;
-        } else {
-          process.env.ADMIN_USERS = ORIGINAL_ADMIN_USERS;
-        }
-        if (ORIGINAL_ADMIN_AUTH_USERNAME === undefined) {
-          delete process.env.ADMIN_AUTH_USERNAME;
-        } else {
-          process.env.ADMIN_AUTH_USERNAME = ORIGINAL_ADMIN_AUTH_USERNAME;
-        }
-        if (ORIGINAL_ADMIN_AUTH_PASSWORD === undefined) {
-          delete process.env.ADMIN_AUTH_PASSWORD;
-        } else {
-          process.env.ADMIN_AUTH_PASSWORD = ORIGINAL_ADMIN_AUTH_PASSWORD;
-        }
-        if (ORIGINAL_APP_ROOT === undefined) {
-          delete process.env.APP_ROOT;
-        } else {
-          process.env.APP_ROOT = ORIGINAL_APP_ROOT;
-        }
+        if (ORIGINAL_ADMIN_USERS === undefined) delete process.env.ADMIN_USERS;
+        else process.env.ADMIN_USERS = ORIGINAL_ADMIN_USERS;
+        if (ORIGINAL_ADMIN_AUTH_USERNAME === undefined) delete process.env.ADMIN_AUTH_USERNAME;
+        else process.env.ADMIN_AUTH_USERNAME = ORIGINAL_ADMIN_AUTH_USERNAME;
+        if (ORIGINAL_ADMIN_AUTH_PASSWORD === undefined) delete process.env.ADMIN_AUTH_PASSWORD;
+        else process.env.ADMIN_AUTH_PASSWORD = ORIGINAL_ADMIN_AUTH_PASSWORD;
+        if (ORIGINAL_APP_ROOT === undefined) delete process.env.APP_ROOT;
+        else process.env.APP_ROOT = ORIGINAL_APP_ROOT;
         process.chdir(ORIGINAL_CWD);
         server.close(() => resolve());
       })
   );
 
+  // ── Room helpers ──────────────────────────────
+
   async function createRoom() {
     const response = await makeRequest(server, "POST", "/rooms", {
       ownerOpenId: OWNER,
-      roomConfig: { playerCount: 5, roleConfig: "independent" },
+      ruleSetCode: "classic_v1",
+      deckTemplateCode: "classic_pool_v1",
       requestId: "create-room",
     });
     expect(response.status).toBe(201);
@@ -119,116 +110,152 @@ describe("Express HTTP gateway", () => {
     }
   }
 
-  async function readyAll(roomId: string) {
-    const response = await makeRequest(server, "GET", `/rooms/${roomId}`);
-    const players = (response.body as { room: { players: Array<{ openId: string }> } }).room.players;
-    for (const player of players) {
-      const readyResponse = await makeRequest(server, "POST", `/rooms/${roomId}/ready`, {
-        openId: player.openId,
-        ready: true,
-        requestId: `ready-${player.openId}`,
-      });
-      expect(readyResponse.status).toBe(200);
-    }
+  async function startGame(roomId: string) {
+    const response = await makeRequest(server, "POST", `/rooms/${roomId}/start`, {
+      openId: OWNER,
+      seed: "test-seed",
+      requestId: "start-game",
+    });
+    expect(response.status).toBe(200);
+    return response;
   }
 
   async function confirmRoles(roomId: string) {
     const response = await makeRequest(server, "GET", `/rooms/${roomId}`);
-    const players = (response.body as {
-      room: { players: Array<{ openId: string; candidateRoles: string[] }> };
-    }).room.players;
-    for (const [index, player] of players.entries()) {
-      const roleId =
-        index === 0
-          ? player.candidateRoles.find((role) => role !== "passenger") ?? player.candidateRoles[0]
-          : player.candidateRoles.find((role) => role === "passenger") ?? player.candidateRoles[0];
+    const matchPlayers = (response.body as {
+      room: { match: { players: Array<{ openId: string; roleOptions: string[] }> } };
+    }).room.match.players;
+    for (const [index, player] of matchPlayers.entries()) {
+      const roleCode = player.roleOptions[0]!;
       const selectResponse = await makeRequest(server, "POST", `/rooms/${roomId}/role-selection`, {
         openId: player.openId,
-        roleId,
-        requestId: `role-${player.openId}`,
+        roleCode,
+        requestId: `role-${index}`,
       });
       expect(selectResponse.status).toBe(200);
     }
+    // All roles confirmed → advance to bet
+    const advRes = await makeRequest(server, "POST", `/rooms/${roomId}/stage/advance`, {
+      openId: OWNER,
+      requestId: "prep-to-bet",
+    });
+    expect(advRes.status).toBe(200);
   }
 
-  it("creates room with owner in lobby", async () => {
+  // ── Room API tests ────────────────────────────
+
+  it("creates room with owner in preparation stage", async () => {
     const roomId = await createRoom();
     const response = await makeRequest(server, "GET", `/rooms/${roomId}`);
     expect(response.status).toBe(200);
     const room = (response.body as { room: { playerCount: number; currentStage: string } }).room;
     expect(room.playerCount).toBe(1);
-    expect(room.currentStage).toBe("lobby");
+    expect(room.currentStage).toBe("preparation");
   });
 
-  it("updates room config through owner endpoint", async () => {
-    const roomId = await createRoom();
-    const response = await makeRequest(server, "POST", `/rooms/${roomId}/config`, {
-      openId: OWNER,
-      roomConfig: { playerCount: 6, roleConfig: "faction" },
-      requestId: "cfg-1",
+  it("returns 400 when ownerOpenId is missing on POST /rooms", async () => {
+    const response = await makeRequest(server, "POST", "/rooms", {
+      ruleSetCode: "classic_v1",
+      deckTemplateCode: "classic_pool_v1",
     });
-    expect(response.status).toBe(200);
-    const room = (response.body as { room: { roomConfig: { playerCount: number } } }).room;
-    expect(room.roomConfig.playerCount).toBe(6);
+    expect(response.status).toBe(400);
   });
 
-  it("starts role selection after all players are ready", async () => {
+  it("returns 400 when ruleSetCode is missing on POST /rooms", async () => {
+    const response = await makeRequest(server, "POST", "/rooms", {
+      ownerOpenId: OWNER,
+      deckTemplateCode: "classic_pool_v1",
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("player can join and leave a room", async () => {
     const roomId = await createRoom();
-    await joinPlayers(roomId, 4);
-    await readyAll(roomId);
-    const response = await makeRequest(server, "GET", `/rooms/${roomId}`);
-    expect((response.body as { room: { currentStage: string } }).room.currentStage).toBe("roleSelection");
+    const joinRes = await makeRequest(server, "POST", `/rooms/${roomId}/players`, {
+      openId: "new-player",
+      nickname: "New",
+      avatar: "",
+      requestId: "join-1",
+    });
+    expect(joinRes.status).toBe(200);
+    expect((joinRes.body as { room: { playerCount: number } }).room.playerCount).toBe(2);
+
+    const leaveRes = await makeRequest(server, "DELETE", `/rooms/${roomId}/players/new-player`);
+    expect(leaveRes.status).toBe(200);
+    expect((leaveRes.body as { room: { playerCount: number } }).room.playerCount).toBe(1);
+  });
+
+  it("startGame transitions to preparation stage", async () => {
+    const roomId = await createRoom();
+    await joinPlayers(roomId, 4); // owner + 4 = 5 players
+    const response = await startGame(roomId);
+    const room = (response.body as { room: { gameState: string; currentStage: string } }).room;
+    expect(room.gameState).toBe("start");
+    expect(room.currentStage).toBe("preparation");
+  });
+
+  it("startGame rejects fewer than 5 players", async () => {
+    const roomId = await createRoom();
+    await joinPlayers(roomId, 2); // owner + 2 = 3 players
+    const response = await makeRequest(server, "POST", `/rooms/${roomId}/start`, {
+      openId: OWNER,
+      seed: "s",
+      requestId: "sg-bad",
+    });
+    expect(response.status).toBe(400);
   });
 
   it("enters bet stage after role confirmation", async () => {
     const roomId = await createRoom();
     await joinPlayers(roomId, 4);
-    await readyAll(roomId);
+    await startGame(roomId);
     await confirmRoles(roomId);
     const response = await makeRequest(server, "GET", `/rooms/${roomId}`);
-    const room = (response.body as { room: { gameState: string; currentStage: string; currentRound: number } }).room;
-    expect(room.gameState).toBe("playing");
+    const room = (response.body as { room: { gameState: string; currentStage: string } }).room;
+    expect(room.gameState).toBe("start");
     expect(room.currentStage).toBe("bet");
-    expect(room.currentRound).toBe(1);
   });
 
-  it("rejects invalid action card on bet submission", async () => {
+  it("rejects role selection with invalid roleCode", async () => {
     const roomId = await createRoom();
     await joinPlayers(roomId, 4);
-    await readyAll(roomId);
-    await confirmRoles(roomId);
-    const response = await makeRequest(server, "POST", `/rooms/${roomId}/bets`, {
+    await startGame(roomId);
+    const response = await makeRequest(server, "POST", `/rooms/${roomId}/role-selection`, {
       openId: OWNER,
-      actionCard: "bad-card",
-      requestId: "bet-bad",
+      roleCode: "totally_fake_role",
+      requestId: "bad-role",
     });
     expect(response.status).toBe(400);
   });
 
-  it("advances from bet to action", async () => {
+  it("advances from bet to environment", async () => {
     const roomId = await createRoom();
     await joinPlayers(roomId, 4);
-    await readyAll(roomId);
+    await startGame(roomId);
     await confirmRoles(roomId);
 
-    const roomSnapshot = await makeRequest(server, "GET", `/rooms/${roomId}`);
-    const players = (roomSnapshot.body as { room: { players: Array<{ openId: string }> } }).room.players;
-    for (const player of players) {
-      const response = await makeRequest(server, "POST", `/rooms/${roomId}/bets`, {
-        openId: player.openId,
-        actionCard: "listen",
-        requestId: `bet-${player.openId}`,
-      });
-      expect(response.status).toBe(200);
-    }
-
+    // Now in bet stage – advance to environment
     const advanceResponse = await makeRequest(server, "POST", `/rooms/${roomId}/stage/advance`, {
       openId: OWNER,
       requestId: "advance-1",
     });
     expect(advanceResponse.status).toBe(200);
     const room = (advanceResponse.body as { room: { currentStage: string } }).room;
-    expect(room.currentStage).toBe("action");
+    expect(room.currentStage).toBe("environment");
+  });
+
+  it("rejects action submission with unknown card", async () => {
+    const roomId = await createRoom();
+    await joinPlayers(roomId, 4);
+    await startGame(roomId);
+    await confirmRoles(roomId);
+
+    const response = await makeRequest(server, "POST", `/rooms/${roomId}/actions`, {
+      openId: OWNER,
+      cardInstanceId: "nonexistent-card-id",
+      requestId: "act-bad",
+    });
+    expect(response.status).toBe(400);
   });
 
   it("aggregates admin overview stats and markdown docs", async () => {
