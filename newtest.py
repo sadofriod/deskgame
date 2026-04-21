@@ -136,8 +136,7 @@ class DeskGameTest:
             # 使用该玩家的第一个角色选项（从startGame响应中获取）
             role_options = self.player_role_options.get(oid, [])
             if not role_options:
-                print(f"{player['nickname']} 无角色选项，跳过")
-                continue
+                raise Exception(f"{player['nickname']} ({oid}) 无角色选项，startGame响应中未找到该玩家，终止测试")
             role_code = role_options[0]
 
             url = f"{self.base_url}/rooms/{self.room_id}/role-selection"
@@ -164,8 +163,7 @@ class DeskGameTest:
             oid = player["openId"]
             hand_cards = self.player_hand_cards.get(oid, [])
             if not hand_cards:
-                print(f"{player['nickname']} 无手牌，跳过")
-                continue
+                raise Exception(f"{player['nickname']} ({oid}) 无可用手牌，startGame响应中未找到手牌，终止测试")
             card_instance_id = hand_cards[0]["cardInstanceId"]
 
             url = f"{self.base_url}/rooms/{self.room_id}/actions"
