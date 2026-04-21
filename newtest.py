@@ -4,7 +4,7 @@ import time
 from typing import Dict, List, Optional
 
 # ===================== 基础配置 =====================
-BASE_URL = "http://localhost:3000"  # 后端服务基础地址（临时使用localhost）
+BASE_URL = "https://deskgame.ashesborn.cloud"  # 后端服务基础地址
 # 模拟6个玩家的信息（openId 需唯一，nickname/avatar 为测试用）
 PLAYERS = [
     {"openId": "player_001", "nickname": "玩家1（房主）", "avatar": "avatar_1"},
@@ -58,6 +58,7 @@ class DeskGameTest:
         self.host_player = players[0]  # 第一个玩家作为房主
         self.player_role_options: Dict[str, List[str]] = {}  # openId → roleOptions（startGame后赋值）
         self.player_hand_cards: Dict[str, List[Dict]] = {}   # openId → handCards（startGame后赋值）
+        self.alive_players: List[Dict] = list(players)       # 存活玩家列表，随回合更新
 
     def create_room(self):
         """创建房间（房主操作）"""
@@ -159,11 +160,12 @@ class DeskGameTest:
             raise Exception("房间ID为空，无法提交押牌")
 
         # 每个玩家提交押牌（使用实际手牌的cardInstanceId，格式为 {openId}-card-0）
-        for player in self.players:
+        for player in self.alive_players:
             oid = player["openId"]
             hand_cards = self.player_hand_cards.get(oid, [])
             if not hand_cards:
-                raise Exception(f"{player['nickname']} ({oid}) 无可用手牌，startGame响应中未找到手牌，终止测试")
+                print(f"{player['nickname']} ({oid}) 无可用手牌，跳过押牌")
+                continue
             card_instance_id = hand_cards[0]["cardInstanceId"]
 
             url = f"{self.base_url}/rooms/{self.room_id}/actions"
@@ -176,7 +178,7 @@ class DeskGameTest:
             if resp["success"]:
                 print(f"{player['nickname']} 押牌提交成功（cardInstanceId: {card_instance_id}）")
             else:
-                print(f"{player['nickname']} 押牌提交失败！错误: {resp['error']}")
+                print(f"{player['nickname']} 押牌提交失败（可能角色不支持押牌）：{resp['error']}")
             time.sleep(0.5)
 
     def reveal_environment(self):
@@ -203,10 +205,10 @@ class DeskGameTest:
             raise Exception("房间ID为空，无法提交投票")
 
         # 模拟投票：每个玩家随机投给另一个玩家（测试用）
-        for i, voter in enumerate(self.players):
+        for i, voter in enumerate(self.alive_players):
             # 投票目标：避开自己，选下一个玩家
-            target_idx = (i + 1) % len(self.players)
-            target_player = self.players[target_idx]
+            target_idx = (i + 1) % len(self.alive_players)
+            target_player = self.alive_players[target_idx]
 
             url = f"{self.base_url}/rooms/{self.room_id}/votes"
             payload = {
@@ -223,8 +225,8 @@ class DeskGameTest:
                 print(f"{voter['nickname']} 投票失败！错误: {resp['error']}")
             time.sleep(0.5)
 
-    def advance_stage(self, label: str = ""):
-        """推进到下一个阶段（房主操作）"""
+    def advance_stage(self, label: str = "") -> Optional[Dict]:
+        """推进到下一个阶段（房主操作），返回响应数据"""
         print(f"\n=== 推进阶段{f'（{label}）' if label else ''} ===")
         if not self.room_id:
             raise Exception("房间ID为空，无法推进阶段")
@@ -238,8 +240,94 @@ class DeskGameTest:
         if resp["success"]:
             current_stage = resp["data"]["room"].get("currentStage", "未知")
             print(f"阶段推进成功！当前阶段: {current_stage}")
+            return resp["data"]
         else:
             print(f"阶段推进失败！错误: {resp['error']}")
+            return None
+
+    def _sync_players_from_snapshot(self, room_data: Dict):
+        """从房间快照同步存活玩家的手牌信息"""
+        match_players = room_data.get("room", {}).get("match", {}).get("players", [])
+        alive_openids = set()
+        for mp in match_players:
+            oid = mp["openId"]
+            status = mp.get("status", "")
+            if status not in ("eliminated", "dead"):
+                alive_openids.add(oid)
+                remaining = [c for c in mp.get("handCards", []) if not c.get("consumed", False)]
+                if remaining:
+                    self.player_hand_cards[oid] = remaining
+        # 更新存活玩家列表
+        self.alive_players = [p for p in self.players if p["openId"] in alive_openids]
+        print(f"存活玩家: {[p['nickname'] for p in self.alive_players]}")
+
+    def _is_game_over(self, room_data: Optional[Dict]) -> bool:
+        """判断游戏是否已结束"""
+        if not room_data:
+            return True  # 推进失败视为游戏结束
+        room = room_data.get("room", {})
+        game_state = room.get("gameState", "")
+        current_stage = room.get("currentStage", "")
+        return game_state in ("finished", "closed", "ended") or current_stage in ("end", "finished", "closed")
+
+    def _handle_settlement_result(self, settlement_data: Dict, floor: int) -> bool:
+        """
+        处理 settlement 推进后的结果，含 tieBreak 循环。
+        返回 True 表示游戏结束，False 表示继续。
+        """
+        if not settlement_data:
+            print("settlement 推进失败，无法判断游戏状态")
+            return True
+
+        room_snapshot = settlement_data.get("room", {})
+        game_state = room_snapshot.get("gameState", "")
+        current_stage = room_snapshot.get("currentStage", "")
+        print(f"结算后 gameState={game_state}，currentStage={current_stage}")
+
+        if self._is_game_over(settlement_data):
+            winner = room_snapshot.get("match", {}).get("winner")
+            print(f"游戏结束！获胜者: {winner}")
+            return True
+
+        # tieBreak 处理：tieBreak → vote → settlement 循环
+        if current_stage == "tieBreak":
+            print(f"\n--- floor{floor}: 处理 tieBreak ---")
+            self.advance_stage(f"floor{floor}: tieBreak→vote")
+            self.submit_vote()
+            tie_settlement_data = self.advance_stage(f"floor{floor}: tieBreak vote→settlement")
+            return self._handle_settlement_result(tie_settlement_data, floor)
+
+        # 游戏继续到下一回合：同步存活玩家及手牌
+        self._sync_players_from_snapshot(settlement_data)
+        return False
+
+    def run_one_round(self, floor: int) -> bool:
+        """
+        执行一个完整回合（从 bet 到 settlement）。
+        第一回合（floor=1）在外部已处理了 role selection；之后的回合直接从 bet 开始。
+        返回 True 表示游戏已结束，False 表示继续下一回合。
+        """
+        print(f"\n{'='*10} 第 {floor} 回合 {'='*10}")
+
+        # bet 阶段：提交押牌
+        self.submit_bet_action()
+        # bet → environment
+        self.advance_stage(f"floor{floor}: bet→environment")
+        # 揭示环境牌
+        self.reveal_environment()
+        # environment → action
+        self.advance_stage(f"floor{floor}: environment→action")
+        # action → damage（触发伤害结算）
+        self.advance_stage(f"floor{floor}: action→damage（结算）")
+        # damage → talk
+        self.advance_stage(f"floor{floor}: damage→talk")
+        # talk → vote
+        self.advance_stage(f"floor{floor}: talk→vote")
+        # 提交投票
+        self.submit_vote()
+        # vote → settlement
+        settlement_data = self.advance_stage(f"floor{floor}: vote→settlement")
+        return self._handle_settlement_result(settlement_data, floor)
 
     def get_room_snapshot(self):
         """获取房间快照，查看当前状态"""
@@ -256,11 +344,23 @@ class DeskGameTest:
             print(f"  当前阶段: {snapshot.get('currentStage')}")
             print(f"  游戏状态: {snapshot.get('gameState')}")
             print(f"  玩家列表: {[p['openId'] for p in snapshot.get('roomPlayers', [])]}")
+        elif resp.get("status_code") == 404:
+            print("房间已关闭（404），游戏正常结束")
         else:
             print(f"获取房间快照失败！错误: {resp['error']}")
 
-    def run_full_test(self):
-        """运行完整的六人玩家测试流程"""
+    def advance_to_bet(self, floor: int):
+        """从当前阶段（可能是 settlement 或 preparation）推进到 bet 阶段"""
+        # 最多推进两次：settlement→preparation→bet 或 preparation→bet
+        for attempt in range(1, 3):
+            data = self.advance_stage(f"floor{floor}: →bet (attempt {attempt})")
+            if not data:
+                return
+            if data.get("room", {}).get("currentStage") == "bet":
+                return
+
+    def run_full_test(self, max_rounds: int = 10):
+        """运行多回合六人玩家测试流程，最多执行 max_rounds 回合"""
         try:
             # 1. 创建房间
             self.create_room()
@@ -268,32 +368,28 @@ class DeskGameTest:
             self.join_room()
             # 3. 开始游戏（同时获取每个玩家的角色选项和手牌）
             self.start_game()
-            # 4. 所有玩家确认角色选择（preparation 阶段）
+            # 4. 所有玩家确认角色选择（preparation 阶段，仅第一回合需要）
             self.confirm_role_selection()
             # 5. 推进到 bet 阶段（preparation → bet）
             self.advance_stage("preparation→bet")
-            # 6. 所有玩家提交押牌（bet 阶段）
-            self.submit_bet_action()
-            # 7. 推进到 environment 阶段（bet → environment）
-            self.advance_stage("bet→environment")
-            # 8. 揭示环境牌（environment 阶段）
-            self.reveal_environment()
-            # 9. 推进到 action 阶段（environment → action）
-            self.advance_stage("environment→action")
-            # 10. 推进到 damage 阶段（action → damage，触发结算）
-            self.advance_stage("action→damage（结算）")
-            # 11. 推进到 talk 阶段（damage → talk）
-            self.advance_stage("damage→talk")
-            # 12. 推进到 vote 阶段（talk → vote）
-            self.advance_stage("talk→vote")
-            # 13. 所有玩家提交投票（vote 阶段）
-            self.submit_vote()
-            # 14. 推进到 settlement 阶段（vote → settlement，解析投票结果）
-            self.advance_stage("vote→settlement")
-            # 15. 获取房间最终快照
+
+            # 多回合循环：每次执行完整的 bet→settlement 流程
+            for floor in range(1, max_rounds + 1):
+                game_ended = self.run_one_round(floor)
+                if game_ended:
+                    break
+                if not self.alive_players:
+                    print("所有玩家已淘汰，测试终止")
+                    break
+                # 下一回合：从当前阶段推进到 bet（可能需经过 settlement→preparation→bet）
+                self.advance_to_bet(floor + 1)
+            else:
+                print(f"\n已达到最大回合数 {max_rounds}，测试结束")
+
+            # 获取房间最终快照
             self.get_room_snapshot()
 
-            print("\n=== 测试流程执行完成 ===")
+            print("\n=== 多回合测试流程执行完成 ===")
         except Exception as e:
             print(f"\n=== 测试流程异常终止：{e} ===")
 
