@@ -41,6 +41,8 @@ export interface ActionSubmission {
   sequence: number;
   sourceStage: Stage;
   isLocked: boolean;
+  /** Target player openId for cards that require a target (e.g. `grab`). */
+  targetOpenId?: string;
 }
 
 export interface VoteSubmissionRecord {
@@ -54,6 +56,8 @@ export interface DamageRecord {
   openId: string;
   damage: number;
   reason: string;
+  /** True when this damage is unblockable (e.g. from `grab`) and cannot be prevented by `endure`. */
+  unblockable?: boolean;
 }
 
 export interface SettlementResult {

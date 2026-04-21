@@ -288,6 +288,86 @@ describe("Room boundary flow", () => {
     ).toThrow();
   });
 
+  it("submitAction rejects grab without targetOpenId (BUG-03 validation)", () => {
+    const room = roomAtBetStage();
+    const snap = room.snapshot();
+    // Find a player who holds a grab card
+    const grabPlayer = snap.match!.players.find((p) =>
+      p.handCards.some((c) => c.actionCardCode === "grab" && !c.consumed)
+    );
+    if (!grabPlayer) return; // no grab card this seed — skip
+    const grabCard = grabPlayer.handCards.find((c) => c.actionCardCode === "grab" && !c.consumed)!;
+    expect(() =>
+      room.submitAction({
+        requestId: "grab-no-target",
+        roomId: room.id,
+        openId: grabPlayer.openId,
+        cardInstanceId: grabCard.cardInstanceId,
+        // no targetOpenId provided
+      })
+    ).toThrow("targetOpenId");
+  });
+
+  it("submitAction rejects grab targeting self (BUG-03 validation)", () => {
+    const room = roomAtBetStage();
+    const snap = room.snapshot();
+    const grabPlayer = snap.match!.players.find((p) =>
+      p.handCards.some((c) => c.actionCardCode === "grab" && !c.consumed)
+    );
+    if (!grabPlayer) return;
+    const grabCard = grabPlayer.handCards.find((c) => c.actionCardCode === "grab" && !c.consumed)!;
+    expect(() =>
+      room.submitAction({
+        requestId: "grab-self",
+        roomId: room.id,
+        openId: grabPlayer.openId,
+        cardInstanceId: grabCard.cardInstanceId,
+        targetOpenId: grabPlayer.openId,
+      })
+    ).toThrow("cannot target");
+  });
+
+  it("submitAction rejects grab targeting unknown player (BUG-03 validation)", () => {
+    const room = roomAtBetStage();
+    const snap = room.snapshot();
+    const grabPlayer = snap.match!.players.find((p) =>
+      p.handCards.some((c) => c.actionCardCode === "grab" && !c.consumed)
+    );
+    if (!grabPlayer) return;
+    const grabCard = grabPlayer.handCards.find((c) => c.actionCardCode === "grab" && !c.consumed)!;
+    expect(() =>
+      room.submitAction({
+        requestId: "grab-unknown",
+        roomId: room.id,
+        openId: grabPlayer.openId,
+        cardInstanceId: grabCard.cardInstanceId,
+        targetOpenId: "nonexistent-player",
+      })
+    ).toThrow("not a player");
+  });
+
+  it("submitAction accepts grab with valid target (BUG-03 validation)", () => {
+    const room = roomAtBetStage();
+    const snap = room.snapshot();
+    const grabPlayer = snap.match!.players.find((p) =>
+      p.handCards.some((c) => c.actionCardCode === "grab" && !c.consumed)
+    );
+    if (!grabPlayer) return;
+    const grabCard = grabPlayer.handCards.find((c) => c.actionCardCode === "grab" && !c.consumed)!;
+    const target = snap.match!.players.find((p) => p.openId !== grabPlayer.openId && p.isAlive)!;
+    room.clearEvents();
+    expect(() =>
+      room.submitAction({
+        requestId: "grab-valid",
+        roomId: room.id,
+        openId: grabPlayer.openId,
+        cardInstanceId: grabCard.cardInstanceId,
+        targetOpenId: target.openId,
+      })
+    ).not.toThrow();
+    expect(room.events.some((e) => e.name === "ActionSubmitted")).toBe(true);
+  });
+
   // AdvanceStage
   it("advanceStage rejects non-owner without timeout", () => {
     const room = roomAtBetStage();
@@ -365,6 +445,53 @@ describe("Room boundary flow", () => {
         votePowerAtSubmit: 1,
       })
     ).toThrow("vote");
+  });
+
+  // ── BUG-09: empty-bet players get canVote=false after bet→environment ────────
+  it("advances bet→environment and sets canVote=false for players who did not submit action (BUG-09 fix)", () => {
+    const room = roomAtBetStage();
+    // Only the first player submits an action card
+    const snap = room.snapshot();
+    const firstPlayer = snap.match!.players[0]!;
+    const cardId = firstPlayer.handCards[0]!.cardInstanceId;
+    room.submitAction({ requestId: "act-bet", roomId: room.id, openId: firstPlayer.openId, cardInstanceId: cardId });
+
+    // Advance bet → environment
+    room.advanceStage({ requestId: "bet-to-env", roomId: room.id, openId: OWNER });
+    expect(room.snapshot().currentStage).toBe(Stage.environment);
+
+    const afterSnap = room.snapshot();
+    // Player who submitted can still vote
+    const bettor = afterSnap.match!.players.find((p) => p.openId === firstPlayer.openId)!;
+    expect(bettor.canVote).toBe(true);
+    // All other alive players who did not bet should have canVote=false
+    const nonBettors = afterSnap.match!.players.filter(
+      (p) => p.openId !== firstPlayer.openId && p.isAlive
+    );
+    for (const p of nonBettors) {
+      expect(p.canVote).toBe(false);
+    }
+  });
+
+  // ── BUG-11: fatterCanSeeEachOther in CardsDealt event ────────────────────────
+  it("CardsDealt event has fatterCanSeeEachOther=false for 5-player game (BUG-11 fix)", () => {
+    const room = roomAfterStart(); // 5 players
+    const evt = room.events.find((e) => e.name === "CardsDealt");
+    expect(evt?.name).toBe("CardsDealt");
+    if (evt?.name === "CardsDealt") {
+      expect(evt.fatterCanSeeEachOther).toBe(false);
+    }
+  });
+
+  it("CardsDealt event has fatterCanSeeEachOther=true for 7-player game (BUG-11 fix)", () => {
+    const room = makeRoom();
+    addPlayers(room, 6); // owner + 6 = 7 players
+    room.startGame({ requestId: REQ(200), roomId: room.id, openId: OWNER, seed: "test-seed" });
+    const evt = room.events.find((e) => e.name === "CardsDealt");
+    expect(evt?.name).toBe("CardsDealt");
+    if (evt?.name === "CardsDealt") {
+      expect(evt.fatterCanSeeEachOther).toBe(true);
+    }
   });
 
   // Version increments
