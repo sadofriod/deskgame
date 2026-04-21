@@ -158,8 +158,9 @@ class DeskGameTest:
 
     def _verify_environment_damage(self, floor: int) -> Dict[str, Any]:
         """对比 damage 阶段前后的 hp，校验环境牌伤害是否符合规则。
-        注意：实际伤害 = 环境伤害 + 行动牌伤害（吹/抓/吸 自伤等）。本校验只保证
-        “实际伤害 ≥ 环境伤害下限”（考虑 endure/忍者 等减免前提）。"""
+        注意：实际伤害 = 环境伤害 + 行动牌伤害（吹/抓/吸 自伤等）。
+        本校验保证：roundKind 分类正确，且“实际伤害 >= 环境伤害下限”。
+        若押牌为 endure，环境伤害下限视为 0（普通伤害可被 endure 抵消）。"""
         round_state = self._current_round()
         env_code = round_state.get("environmentCardCode")
         round_kind = round_state.get("roundKind")
@@ -173,13 +174,14 @@ class DeskGameTest:
         expected_kind = "gas" if env_code in GAS_CARDS else "safe"
         kind_ok = round_kind == expected_kind
 
-        # 环境伤害下限（不考虑行动牌加伤或 endure 减免）
-        # 仅作软性检查：actual_damage 必须 >= 环境本身的伤害（endure 减免除外——这里不做精确验证）
+        # 环境伤害下限（考虑 endure 将普通伤害抵消为 0）
         env_only: Dict[str, int] = {}
+        env_min: Dict[str, int] = {}
         for oid in after:
             eo = self._expected_env_damage(env_code or "", oid)
             if eo is not None:
                 env_only[oid] = eo
+                env_min[oid] = 0 if self._bet_action_code(oid) == "endure" else eo
 
         result: Dict[str, Any] = {
             "floor": floor,
@@ -187,6 +189,7 @@ class DeskGameTest:
             "roundKind": round_kind,
             "kindOk": kind_ok,
             "envOnlyDamage": env_only,
+            "envMinDamage": env_min,
             "actualDamage": actual_damage,
             "before": before,
             "after": after,
@@ -199,14 +202,21 @@ class DeskGameTest:
             f"expectedKind={expected_kind}"
         )
         print(f"  envOnlyDamage={env_only}")
+        print(f"  envMinDamage ={env_min}")
         print(f"  actualDamage ={actual_damage}")
-        # 软性：实际总伤害 >= 环境伤害（未触发 endure 的普通场景下应该成立）
-        for oid, env_dmg in env_only.items():
+        issues: List[str] = []
+        if not kind_ok:
+            issues.append(
+                f"floor={floor}: roundKind={round_kind} 与 environmentCardCode={env_code} 不一致"
+            )
+        for oid, min_dmg in env_min.items():
             act = actual_damage.get(oid, 0)
-            if env_dmg > 0 and act < env_dmg:
-                print(
-                    f"  WARN {oid}: 实际伤害 {act} < 环境最低伤害 {env_dmg}（可能由 endure/忍者 减免）"
+            if act < min_dmg:
+                issues.append(
+                    f"floor={floor}: {oid} 实际伤害 {act} < 环境伤害下限 {min_dmg} (env={env_code})"
                 )
+        if issues:
+            raise AssertionError("环境牌伤害校验失败: " + " | ".join(issues))
         return result
 
     def _verify_env_pool(self) -> None:
@@ -243,6 +253,7 @@ class DeskGameTest:
             print("环境牌池校验失败：")
             for msg in issues:
                 print(f"  - {msg}")
+            raise AssertionError("环境牌池校验失败: " + " | ".join(issues))
         else:
             print("环境牌池校验通过 ✓")
 
@@ -516,6 +527,7 @@ class DeskGameTest:
         except Exception as e:
             print(f"\n=== 测试流程异常终止：{e} ===")
             self._verify_env_pool()
+            raise
 
 
 if __name__ == "__main__":
