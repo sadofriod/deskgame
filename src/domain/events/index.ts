@@ -55,6 +55,8 @@ export interface CardsDealt extends BaseDomainEvent {
   matchId: string;
   currentFloor: number;
   currentStage: Stage;
+  /** True when playerCount >= 7: fatter players can identify each other. */
+  fatterCanSeeEachOther: boolean;
   players: Array<{
     openId: string;
     identityCode: string;

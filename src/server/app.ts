@@ -460,13 +460,14 @@ export function createApp(rooms: RoomStore = new Map()): express.Application {
   app.post("/rooms/:roomId/actions", async (req: Request, res: Response, next: NextFunction) => {
     try {
       const roomId = String(req.params["roomId"]);
-      const { openId, cardInstanceId, requestId = uuidv4() } = req.body as {
+      const { openId, cardInstanceId, targetOpenId, requestId = uuidv4() } = req.body as {
         openId: string;
         cardInstanceId: string;
+        targetOpenId?: string;
         requestId?: string;
       };
       const room = await loadRoom(roomId);
-      room.submitAction({ requestId, roomId, openId, cardInstanceId });
+      room.submitAction({ requestId, roomId, openId, cardInstanceId, targetOpenId });
       await persist(room);
       res.status(200).json({ events: room.events, room: room.snapshot() });
     } catch (err) {

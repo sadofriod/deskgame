@@ -79,6 +79,8 @@ export interface SubmitActionCommand {
   roomId: string;
   openId: string;
   cardInstanceId: string;
+  /** Target player for cards that require a target (e.g. `grab`). */
+  targetOpenId?: string;
 }
 
 export interface RevealEnvironmentCommand {
@@ -395,6 +397,9 @@ export class Room {
     this.version++;
     this.processedRequests.add(cmd.requestId);
 
+    // BUG-11 fix: in 7+ player games fatter players can identify each other
+    const fatterCanSeeEachOther = this.playerCount >= 7;
+
     this._events.push({
       name: "CardsDealt",
       roomId: this.roomId,
@@ -402,6 +407,7 @@ export class Room {
       matchId,
       currentFloor: this.currentFloor,
       currentStage: this.currentStage,
+      fatterCanSeeEachOther,
       players: assignments.map((a) => ({
         openId: a.openId,
         identityCode: a.identityCode,
@@ -483,6 +489,7 @@ export class Room {
       sequence,
       sourceStage: Stage.bet,
       isLocked: true,
+      targetOpenId: cmd.targetOpenId,
     };
     currentRound.actionSubmissions.push(submission);
     player.consumeCard(cmd.cardInstanceId);
@@ -545,6 +552,26 @@ export class Room {
     if (cmd.voteRound !== currentRound.currentVoteRound)
       throw new Error(`voteRound mismatch: expected ${currentRound.currentVoteRound}, got ${cmd.voteRound}`);
 
+    // BUG-05 fix: scold bettors in a gas round cannot abstain
+    const betSubmission = currentRound.actionSubmissions.find((s) => s.openId === cmd.openId);
+    if (
+      cmd.voteTarget === null &&
+      betSubmission?.actionCardCode === "scold" &&
+      currentRound.roundKind === "gas"
+    ) {
+      throw new Error(
+        `Player ${cmd.openId} must vote for a target: players who bet scold in a gas round cannot abstain`
+      );
+    }
+
+    // BUG-08 fix: validate votePowerAtSubmit against server-computed vote power
+    const expectedVotePower = 1 + player.state.voteModifier;
+    if (cmd.votePowerAtSubmit !== expectedVotePower) {
+      throw new Error(
+        `INVALID_VOTE_POWER: expected ${expectedVotePower}, got ${cmd.votePowerAtSubmit}`
+      );
+    }
+
     currentRound.voteSubmissions.push({
       voteRound: cmd.voteRound,
       voterOpenId: cmd.openId,
@@ -585,7 +612,17 @@ export class Room {
     let nextFloor = this.currentFloor;
 
     // Stage-specific pre-advance logic
-    if (fromStage === Stage.action) {
+    if (fromStage === Stage.bet) {
+      // BUG-09 fix: mark players who did not submit any action as canVote = false
+      const currentRound = this.getCurrentRound();
+      for (const player of this.matchPlayers.values()) {
+        if (!player.isAlive) continue;
+        const hasSubmitted = currentRound?.actionSubmissions.some((s) => s.openId === player.openId) ?? false;
+        if (!hasSubmitted) {
+          player.state.canVote = false;
+        }
+      }
+    } else if (fromStage === Stage.action) {
       // action → damage: run settlement
       this.runSettlement();
     } else if (fromStage === Stage.vote || fromStage === Stage.tieBreak) {
@@ -603,14 +640,17 @@ export class Room {
       });
       isFinal = judgement.isFinal;
 
-      if (resolvedVoteResult) {
+      // BUG-10 fix: retrieve the round's resolved vote result (resolvedVoteResult is a
+      // local variable set only in the vote/tieBreak branch; use round state instead)
+      const roundVoteResult = this.getCurrentRound()?.voteResult ?? null;
+      if (roundVoteResult) {
         this._events.push({
           name: "VoteResolved",
           roomId: this.roomId,
           version: this.version,
           floor: this.currentFloor,
           voteRound: this.getCurrentRound()?.currentVoteRound ?? 1,
-          voteResult: resolvedVoteResult,
+          voteResult: roundVoteResult,
           nextStage: isFinal ? Stage.settlement : Stage.preparation,
         } as VoteResolved);
       }
@@ -687,6 +727,15 @@ export class Room {
         settlementResult: null,
         voteResult: null,
       });
+
+      // BUG-06 fix: reset canSpeak and canVote for all alive players on floor change
+      // BUG-07 fix: reset voteModifier to 0 for all alive players on floor change
+      for (const player of this.matchPlayers.values()) {
+        if (!player.isAlive) continue;
+        player.state.canSpeak = true;
+        player.state.canVote = true;
+        player.state.voteModifier = 0;
+      }
     }
 
     this.version++;
@@ -715,6 +764,7 @@ export class Room {
 
     const players = [...this.matchPlayers.values()].map((p) => ({
       openId: p.openId,
+      seatNo: p.state.seatNo,
       currentHp: p.currentHp,
       isAlive: p.isAlive,
     }));
@@ -732,6 +782,14 @@ export class Room {
     for (const dmg of result.damages) {
       const player = this.matchPlayers.get(dmg.openId);
       player?.applyDamage(dmg.damage);
+    }
+
+    // BUG-05 fix: apply vote modifiers from scold (and any other future effect)
+    for (const vm of result.voteModifiers) {
+      const player = this.matchPlayers.get(vm.openId);
+      if (player) {
+        player.state.voteModifier += vm.modifier;
+      }
     }
 
     this._events.push({

@@ -91,13 +91,11 @@ export class DealService {
         openId,
         identityCode,
         roleOptions: [shuffledRoles[0]!, shuffledRoles[1]!],
-        initialHandCards: [
-          {
-            cardInstanceId: `${openId}-card-0`,
-            // Cycle through card pool so every player always gets a card
-            actionCardCode: shuffledCards[index % cardCount] ?? "listen",
-          },
-        ],
+        // BUG-01 fix: each player receives 4 hand cards (cycling through the shuffled pool)
+        initialHandCards: Array.from({ length: 4 }, (_, cardIndex) => ({
+          cardInstanceId: `${openId}-card-${cardIndex}`,
+          actionCardCode: shuffledCards[(index * 4 + cardIndex) % cardCount] ?? "listen",
+        })),
       };
     });
   }
