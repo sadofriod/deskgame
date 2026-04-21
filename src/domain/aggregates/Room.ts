@@ -615,6 +615,11 @@ export class Room {
     const isTimeout = cmd.trigger === "timeout";
     if (!isTimeout && cmd.openId !== this.ownerOpenId)
       throw new Error("Only owner can advance stage");
+    // After a game has ended, stage advances must be rejected — otherwise
+    // winner judgement would re-run on every subsequent call, re-emit
+    // WinnerDecided, and the room would silently stay frozen in `settlement`.
+    if (this.gameState === GameState.end)
+      throw new Error("Game has already ended");
 
     const fromStage = this.currentStage;
 
@@ -647,6 +652,13 @@ export class Room {
       // Resolve votes for current voteRound
       resolvedVoteResult = this.resolveVotes();
       isTieVote = resolvedVoteResult.isTie;
+      // Per rules ("重新投票后仍平票，则无人出局"): a tie during a tie-break revote
+      // (currentVoteRound > 1) does NOT trigger another tie-break round — it
+      // resolves to no elimination and proceeds straight to settlement.
+      const currentRound = this.getCurrentRound();
+      if (isTieVote && fromStage === Stage.vote && (currentRound?.currentVoteRound ?? 1) > 1) {
+        isTieVote = false;
+      }
     } else if (fromStage === Stage.settlement) {
       // Check winner
       const gasRounds = this.rounds.filter((r) => r.roundKind === "gas" && r.settlementResult !== null).length;
