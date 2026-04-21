@@ -1,11 +1,11 @@
 import requests
 import uuid
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # ===================== 基础配置 =====================
-BASE_URL = "https://deskgame.ashesborn.cloud/"  # 后端服务基础地址
-# 模拟5个玩家的信息（openId 需唯一，nickname/avatar 为测试用）
+BASE_URL = "http://localhost:3000"  # 后端服务基础地址（临时使用localhost）
+# 模拟6个玩家的信息（openId 需唯一，nickname/avatar 为测试用）
 PLAYERS = [
     {"openId": "player_001", "nickname": "玩家1（房主）", "avatar": "avatar_1"},
     {"openId": "player_002", "nickname": "玩家2", "avatar": "avatar_2"},
@@ -14,10 +14,10 @@ PLAYERS = [
     {"openId": "player_005", "nickname": "玩家5", "avatar": "avatar_5"},
     {"openId": "player_006", "nickname": "玩家6", "avatar": "avatar_6"},
 ]
-# 房间配置（可根据后端规则调整）
+# 房间配置（需使用后端支持的规则集和牌组模板编码）
 ROOM_CONFIG = {
-    "ruleSetCode": "default_rule",  # 规则集编码
-    "deckTemplateCode": "default_deck"  # 牌组模板编码
+    "ruleSetCode": "classic_v1",         # 规则集编码
+    "deckTemplateCode": "classic_pool_v1"  # 牌组模板编码
 }
 
 
@@ -56,6 +56,8 @@ class DeskGameTest:
         self.room_config = room_config
         self.room_id = None  # 创建房间后赋值
         self.host_player = players[0]  # 第一个玩家作为房主
+        self.player_role_options: Dict[str, List[str]] = {}  # openId → roleOptions（startGame后赋值）
+        self.player_hand_cards: Dict[str, List[Dict]] = {}   # openId → handCards（startGame后赋值）
 
     def create_room(self):
         """创建房间（房主操作）"""
@@ -69,8 +71,7 @@ class DeskGameTest:
         }
         resp = post_request(url, payload)
         if resp["success"]:
-            self.room_id = resp["data"]["events"][0]["roomId"]# 注意文档要求使用roomId而非id
-            print(resp)
+            self.room_id = resp["data"]["room"]["roomId"]  # 从room快照中取roomId
             print(f"房间创建成功！roomId: {self.room_id}")
             print(f"响应数据: {resp['data']}")
         else:
@@ -113,6 +114,13 @@ class DeskGameTest:
         resp = post_request(url, payload)
         if resp["success"]:
             print("游戏开始成功！")
+            # 从快照中提取每个玩家的角色选项和手牌
+            match_players = resp["data"]["room"].get("match", {}).get("players", [])
+            for mp in match_players:
+                oid = mp["openId"]
+                self.player_role_options[oid] = mp.get("roleOptions", [])
+                self.player_hand_cards[oid] = [c for c in mp.get("handCards", []) if not c.get("consumed", False)]
+            print(f"已获取 {len(self.player_role_options)} 个玩家的角色选项")
         else:
             print(f"游戏开始失败！错误: {resp['error']}")
             raise Exception("开始游戏失败，终止测试")
@@ -123,18 +131,24 @@ class DeskGameTest:
         if not self.room_id:
             raise Exception("房间ID为空，无法确认角色")
 
-        # 模拟所有玩家选择默认角色（roleCode 需根据后端实际值调整）
-        default_role_code = "role_001"
         for player in self.players:
+            oid = player["openId"]
+            # 使用该玩家的第一个角色选项（从startGame响应中获取）
+            role_options = self.player_role_options.get(oid, [])
+            if not role_options:
+                print(f"{player['nickname']} 无角色选项，跳过")
+                continue
+            role_code = role_options[0]
+
             url = f"{self.base_url}/rooms/{self.room_id}/role-selection"
             payload = {
-                "openId": player["openId"],
-                "roleCode": default_role_code,
+                "openId": oid,
+                "roleCode": role_code,
                 "requestId": generate_request_id()
             }
             resp = post_request(url, payload)
             if resp["success"]:
-                print(f"{player['nickname']} 角色确认成功（角色: {default_role_code}）")
+                print(f"{player['nickname']} 角色确认成功（角色: {role_code}）")
             else:
                 print(f"{player['nickname']} 角色确认失败！错误: {resp['error']}")
             time.sleep(0.5)
@@ -145,20 +159,24 @@ class DeskGameTest:
         if not self.room_id:
             raise Exception("房间ID为空，无法提交押牌")
 
-        # 先推进到bet阶段（房主操作）
-        self.advance_stage("bet")
-
-        # 模拟每个玩家提交押牌（cardInstanceId 为测试用随机值）
+        # 每个玩家提交押牌（使用实际手牌的cardInstanceId，格式为 {openId}-card-0）
         for player in self.players:
+            oid = player["openId"]
+            hand_cards = self.player_hand_cards.get(oid, [])
+            if not hand_cards:
+                print(f"{player['nickname']} 无手牌，跳过")
+                continue
+            card_instance_id = hand_cards[0]["cardInstanceId"]
+
             url = f"{self.base_url}/rooms/{self.room_id}/actions"
             payload = {
-                "openId": player["openId"],
-                "cardInstanceId": f"card_{uuid.uuid4().hex[:6]}",  # 模拟卡牌实例ID
+                "openId": oid,
+                "cardInstanceId": card_instance_id,
                 "requestId": generate_request_id()
             }
             resp = post_request(url, payload)
             if resp["success"]:
-                print(f"{player['nickname']} 押牌提交成功")
+                print(f"{player['nickname']} 押牌提交成功（cardInstanceId: {card_instance_id}）")
             else:
                 print(f"{player['nickname']} 押牌提交失败！错误: {resp['error']}")
             time.sleep(0.5)
@@ -186,9 +204,6 @@ class DeskGameTest:
         if not self.room_id:
             raise Exception("房间ID为空，无法提交投票")
 
-        # 先推进到vote阶段（房主操作）
-        self.advance_stage("vote")
-
         # 模拟投票：每个玩家随机投给另一个玩家（测试用）
         for i, voter in enumerate(self.players):
             # 投票目标：避开自己，选下一个玩家
@@ -210,24 +225,21 @@ class DeskGameTest:
                 print(f"{voter['nickname']} 投票失败！错误: {resp['error']}")
             time.sleep(0.5)
 
-    def advance_stage(self, target_stage: str = None):
-        """推进阶段（房主操作），可选指定目标阶段"""
-        print(f"\n=== 推进阶段（目标: {target_stage or '下一个'}） ===")
+    def advance_stage(self, label: str = ""):
+        """推进到下一个阶段（房主操作）"""
+        print(f"\n=== 推进阶段{f'（{label}）' if label else ''} ===")
         if not self.room_id:
             raise Exception("房间ID为空，无法推进阶段")
 
         url = f"{self.base_url}/rooms/{self.room_id}/stage/advance"
         payload = {
             "openId": self.host_player["openId"],
-            "requestId": generate_request_id(),
-            "targetStage": target_stage  # 可选：指定目标阶段
-        } if target_stage else {
-            "openId": self.host_player["openId"],
             "requestId": generate_request_id()
         }
         resp = post_request(url, payload)
         if resp["success"]:
-            print(f"阶段推进成功！当前阶段: {resp['data'].get('currentStage', '未知')}")
+            current_stage = resp["data"]["room"].get("currentStage", "未知")
+            print(f"阶段推进成功！当前阶段: {current_stage}")
         else:
             print(f"阶段推进失败！错误: {resp['error']}")
 
@@ -241,36 +253,46 @@ class DeskGameTest:
         resp = get_request(url)
         if resp["success"]:
             print("房间快照获取成功：")
-            # 打印核心信息
-            snapshot = resp["data"]
+            # GET /rooms/:roomId 返回 { "room": {...} }，需取 room 子对象
+            snapshot = resp["data"]["room"]
             print(f"  当前阶段: {snapshot.get('currentStage')}")
-            print(f"  房间状态: {snapshot.get('status')}")
-            print(f"  玩家列表: {[p['openId'] for p in snapshot.get('players', [])]}")
+            print(f"  游戏状态: {snapshot.get('gameState')}")
+            print(f"  玩家列表: {[p['openId'] for p in snapshot.get('roomPlayers', [])]}")
         else:
             print(f"获取房间快照失败！错误: {resp['error']}")
 
     def run_full_test(self):
-        """运行完整的五人玩家测试流程"""
+        """运行完整的六人玩家测试流程"""
         try:
             # 1. 创建房间
             self.create_room()
             # 2. 其他玩家加入
             self.join_room()
-            # 3. 开始游戏
+            # 3. 开始游戏（同时获取每个玩家的角色选项和手牌）
             self.start_game()
-            # 4. 确认角色选择
+            # 4. 所有玩家确认角色选择（preparation 阶段）
             self.confirm_role_selection()
-            # 5. 提交押牌（bet阶段）
+            # 5. 推进到 bet 阶段（preparation → bet）
+            self.advance_stage("preparation→bet")
+            # 6. 所有玩家提交押牌（bet 阶段）
             self.submit_bet_action()
-            # 6. 揭示环境牌
+            # 7. 推进到 environment 阶段（bet → environment）
+            self.advance_stage("bet→environment")
+            # 8. 揭示环境牌（environment 阶段）
             self.reveal_environment()
-            # 7. 推进到talk阶段
-            self.advance_stage("talk")
-            # 8. 提交投票（vote阶段）
+            # 9. 推进到 action 阶段（environment → action）
+            self.advance_stage("environment→action")
+            # 10. 推进到 damage 阶段（action → damage，触发结算）
+            self.advance_stage("action→damage（结算）")
+            # 11. 推进到 talk 阶段（damage → talk）
+            self.advance_stage("damage→talk")
+            # 12. 推进到 vote 阶段（talk → vote）
+            self.advance_stage("talk→vote")
+            # 13. 所有玩家提交投票（vote 阶段）
             self.submit_vote()
-            # 9. 推进到结算阶段
-            self.advance_stage("settlement")
-            # 10. 获取房间最终快照
+            # 14. 推进到 settlement 阶段（vote → settlement，解析投票结果）
+            self.advance_stage("vote→settlement")
+            # 15. 获取房间最终快照
             self.get_room_snapshot()
 
             print("\n=== 测试流程执行完成 ===")
