@@ -475,6 +475,24 @@ export class Room {
     );
     if (!card) throw new Error(`Card ${cmd.cardInstanceId} not found or already consumed`);
 
+    // Validate target for cards that require one (e.g. `grab`)
+    const TARGETED_CARDS = new Set(["grab"]);
+    if (TARGETED_CARDS.has(card.actionCardCode)) {
+      if (!cmd.targetOpenId) {
+        throw new Error(`Card "${card.actionCardCode}" requires a targetOpenId`);
+      }
+      if (cmd.targetOpenId === cmd.openId) {
+        throw new Error(`Card "${card.actionCardCode}" cannot target the submitting player`);
+      }
+      const target = this.matchPlayers.get(cmd.targetOpenId);
+      if (!target) {
+        throw new Error(`targetOpenId "${cmd.targetOpenId}" is not a player in this match`);
+      }
+      if (!target.isAlive) {
+        throw new Error(`targetOpenId "${cmd.targetOpenId}" is not alive`);
+      }
+    }
+
     const currentRound = this.getCurrentRound();
     if (!currentRound) throw new Error("No current round found");
 

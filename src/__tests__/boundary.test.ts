@@ -288,6 +288,86 @@ describe("Room boundary flow", () => {
     ).toThrow();
   });
 
+  it("submitAction rejects grab without targetOpenId (BUG-03 validation)", () => {
+    const room = roomAtBetStage();
+    const snap = room.snapshot();
+    // Find a player who holds a grab card
+    const grabPlayer = snap.match!.players.find((p) =>
+      p.handCards.some((c) => c.actionCardCode === "grab" && !c.consumed)
+    );
+    if (!grabPlayer) return; // no grab card this seed — skip
+    const grabCard = grabPlayer.handCards.find((c) => c.actionCardCode === "grab" && !c.consumed)!;
+    expect(() =>
+      room.submitAction({
+        requestId: "grab-no-target",
+        roomId: room.id,
+        openId: grabPlayer.openId,
+        cardInstanceId: grabCard.cardInstanceId,
+        // no targetOpenId provided
+      })
+    ).toThrow("targetOpenId");
+  });
+
+  it("submitAction rejects grab targeting self (BUG-03 validation)", () => {
+    const room = roomAtBetStage();
+    const snap = room.snapshot();
+    const grabPlayer = snap.match!.players.find((p) =>
+      p.handCards.some((c) => c.actionCardCode === "grab" && !c.consumed)
+    );
+    if (!grabPlayer) return;
+    const grabCard = grabPlayer.handCards.find((c) => c.actionCardCode === "grab" && !c.consumed)!;
+    expect(() =>
+      room.submitAction({
+        requestId: "grab-self",
+        roomId: room.id,
+        openId: grabPlayer.openId,
+        cardInstanceId: grabCard.cardInstanceId,
+        targetOpenId: grabPlayer.openId,
+      })
+    ).toThrow("cannot target");
+  });
+
+  it("submitAction rejects grab targeting unknown player (BUG-03 validation)", () => {
+    const room = roomAtBetStage();
+    const snap = room.snapshot();
+    const grabPlayer = snap.match!.players.find((p) =>
+      p.handCards.some((c) => c.actionCardCode === "grab" && !c.consumed)
+    );
+    if (!grabPlayer) return;
+    const grabCard = grabPlayer.handCards.find((c) => c.actionCardCode === "grab" && !c.consumed)!;
+    expect(() =>
+      room.submitAction({
+        requestId: "grab-unknown",
+        roomId: room.id,
+        openId: grabPlayer.openId,
+        cardInstanceId: grabCard.cardInstanceId,
+        targetOpenId: "nonexistent-player",
+      })
+    ).toThrow("not a player");
+  });
+
+  it("submitAction accepts grab with valid target (BUG-03 validation)", () => {
+    const room = roomAtBetStage();
+    const snap = room.snapshot();
+    const grabPlayer = snap.match!.players.find((p) =>
+      p.handCards.some((c) => c.actionCardCode === "grab" && !c.consumed)
+    );
+    if (!grabPlayer) return;
+    const grabCard = grabPlayer.handCards.find((c) => c.actionCardCode === "grab" && !c.consumed)!;
+    const target = snap.match!.players.find((p) => p.openId !== grabPlayer.openId && p.isAlive)!;
+    room.clearEvents();
+    expect(() =>
+      room.submitAction({
+        requestId: "grab-valid",
+        roomId: room.id,
+        openId: grabPlayer.openId,
+        cardInstanceId: grabCard.cardInstanceId,
+        targetOpenId: target.openId,
+      })
+    ).not.toThrow();
+    expect(room.events.some((e) => e.name === "ActionSubmitted")).toBe(true);
+  });
+
   // AdvanceStage
   it("advanceStage rejects non-owner without timeout", () => {
     const room = roomAtBetStage();
